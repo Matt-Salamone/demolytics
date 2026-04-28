@@ -1,0 +1,82 @@
+{
+  "Event": "UpdateState",
+  "Data": {
+    "MatchGuid": "MATCH-1",
+    "Players": [
+      {
+        "Name": "PlayerA",
+        "PrimaryId": "Steam|111|0",
+        "Shortcut": 1,
+        "TeamNum": 0,
+        "Score": 125,
+        "Goals": 1,
+        "Shots": 2,
+        "Assists": 0,
+        "Saves": 1,
+        "Touches": 14,
+        "Demos": 1,
+        "Speed": 1200,
+        "Boost": 45,
+        "bBoosting": true,
+        "bOnGround": true,
+        "bPowersliding": false,
+        "bDemolished": false,
+        "bSupersonic": true
+      },
+      {
+        "Name": "PlayerB",
+        "PrimaryId": "Steam|222|0",
+        "Shortcut": 2,
+        "TeamNum": 0,
+        "Score": 75,
+        "Goals": 0,
+        "Shots": 1,
+        "Assists": 1,
+        "Saves": 0,
+        "Touches": 8,
+        "Demos": 0
+      },
+      {
+        "Name": "PlayerC",
+        "PrimaryId": "Epic|333|0",
+        "Shortcut": 3,
+        "TeamNum": 1,
+        "Score": 100,
+        "Goals": 0,
+        "Shots": 2,
+        "Assists": 0,
+        "Saves": 2,
+        "Touches": 12,
+        "Demos": 0
+      },
+      {
+        "Name": "PlayerD",
+        "PrimaryId": "Epic|444|0",
+        "Shortcut": 4,
+        "TeamNum": 1,
+        "Score": 50,
+        "Goals": 0,
+        "Shots": 0,
+        "Assists": 0,
+        "Saves": 0,
+        "Touches": 6,
+        "Demos": 0
+      }
+    ],
+    "Game": {
+      "Teams": [
+        { "Name": "Blue", "TeamNum": 0, "Score": 1 },
+        { "Name": "Orange", "TeamNum": 1, "Score": 0 }
+      ],
+      "TimeSeconds": 180,
+      "bOvertime": false,
+      "Elapsed": 10,
+      "bHasTarget": true,
+      "Target": {
+        "Name": "PlayerA",
+        "Shortcut": 1,
+        "TeamNum": 0
+      }
+    }
+  }
+}
