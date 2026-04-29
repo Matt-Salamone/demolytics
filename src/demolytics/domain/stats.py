@@ -68,6 +68,12 @@ SUPPORTED_STAT_KEYS: tuple[str, ...] = tuple(
 
 TEAM_STAT_KEYS: tuple[str, ...] = tuple(stat.key for stat in STAT_DEFINITIONS if stat.key.startswith("team_"))
 
+STATS_TAB_COLUMN_KEYS: frozenset[str] = frozenset(SUPPORTED_STAT_KEYS) | frozenset(TEAM_STAT_KEYS)
+
+DEFAULT_STATS_TAB_VISIBLE: tuple[str, ...] = tuple(
+    stat.key for stat in STAT_DEFINITIONS if stat.supported or stat.key.startswith("team_")
+)
+
 GLANCE_STAT_KEYS: tuple[str, ...] = SUPPORTED_STAT_KEYS + TEAM_STAT_KEYS
 
 STAT_LABELS: dict[str, str] = {stat.key: stat.label for stat in STAT_DEFINITIONS}

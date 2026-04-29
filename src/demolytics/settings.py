@@ -6,7 +6,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from demolytics.domain.stats import GLANCE_STAT_KEYS, SUPPORTED_STAT_KEYS
+from demolytics.domain.stats import (
+    DEFAULT_STATS_TAB_VISIBLE,
+    GLANCE_STAT_KEYS,
+    STATS_TAB_COLUMN_KEYS,
+    TEAM_STAT_KEYS,
+)
 
 APP_DIR_NAME = "Demolytics"
 SETTINGS_FILE_NAME = "settings.json"
@@ -21,12 +26,18 @@ DEFAULT_GLANCE_STATS: tuple[str, ...] = (
     "airborne_percentage",
 )
 
+SETTINGS_FORMAT_VERSION = 2
+
+STANDARD_PLAYLIST_MODES: tuple[str, ...] = ("1v1", "2v2", "3v3")
+
 
 @dataclass
 class AppSettings:
     websocket_port: int = DEFAULT_PORT
-    visible_stats: list[str] = field(default_factory=lambda: list(SUPPORTED_STAT_KEYS))
+    visible_stats: list[str] = field(default_factory=lambda: list(DEFAULT_STATS_TAB_VISIBLE))
     glance_stats: list[str] = field(default_factory=lambda: list(DEFAULT_GLANCE_STATS))
+    comparison_game_mode: str = "1v1"
+    settings_format_version: int = SETTINGS_FORMAT_VERSION
     database_path: str | None = None
     install_dir: str | None = None
 
@@ -53,9 +64,13 @@ def load_settings(path: Path | None = None) -> AppSettings:
         return settings
 
     raw = json.loads(settings_path.read_text(encoding="utf-8"))
-    settings = AppSettings(**_coerce_known_settings(raw))
+    prev_fmt = int(raw.get("settings_format_version", 1))
+    coerced = _coerce_known_settings(raw)
+    settings = AppSettings(**coerced)
     if settings.database_path is None:
         settings.database_path = str(get_default_database_path())
+    if prev_fmt < SETTINGS_FORMAT_VERSION:
+        save_settings(settings)
     return settings
 
 
@@ -71,7 +86,7 @@ def save_settings(settings: AppSettings, path: Path | None = None) -> None:
 def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
     visible_stats = raw.get("visible_stats")
     if not isinstance(visible_stats, list):
-        visible_stats = list(SUPPORTED_STAT_KEYS)
+        visible_stats = list(DEFAULT_STATS_TAB_VISIBLE)
 
     glance_stats = raw.get("glance_stats")
     if not isinstance(glance_stats, list):
@@ -80,14 +95,25 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if not glance_stats:
         glance_stats = list(DEFAULT_GLANCE_STATS)
 
-    visible_stats = [str(key) for key in visible_stats if str(key) in SUPPORTED_STAT_KEYS]
+    visible_stats = [str(key) for key in visible_stats if str(key) in STATS_TAB_COLUMN_KEYS]
     if not visible_stats:
-        visible_stats = list(SUPPORTED_STAT_KEYS)
+        visible_stats = list(DEFAULT_STATS_TAB_VISIBLE)
+
+    fmt_version = int(raw.get("settings_format_version", 1))
+    if fmt_version < SETTINGS_FORMAT_VERSION and not any(k.startswith("team_") for k in visible_stats):
+        visible_stats = list(dict.fromkeys(list(visible_stats) + list(TEAM_STAT_KEYS)))
+    fmt_version = SETTINGS_FORMAT_VERSION
+
+    comparison_game_mode = str(raw.get("comparison_game_mode", "1v1"))
+    if comparison_game_mode not in STANDARD_PLAYLIST_MODES:
+        comparison_game_mode = "1v1"
 
     return {
         "websocket_port": int(raw.get("websocket_port", DEFAULT_PORT)),
         "visible_stats": visible_stats,
         "glance_stats": glance_stats,
+        "comparison_game_mode": comparison_game_mode,
+        "settings_format_version": fmt_version,
         "database_path": raw.get("database_path"),
         "install_dir": raw.get("install_dir"),
     }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from queue import Queue
-from tkinter import BooleanVar, messagebox
+from tkinter import BooleanVar, StringVar, messagebox
 from typing import Any
 
 import customtkinter as ctk
@@ -19,16 +19,31 @@ from demolytics.domain.aggregator import (
 )
 from demolytics.domain.events import StatsEvent
 from demolytics.domain.stats import (
+    DEFAULT_STATS_TAB_VISIBLE,
     GLANCE_STAT_KEYS,
     STAT_DEFINITIONS,
     STAT_LABELS,
+    STATS_TAB_COLUMN_KEYS,
     SUPPORTED_STAT_KEYS,
     team_stat_suffix,
 )
-from demolytics.settings import AppSettings, DEFAULT_GLANCE_STATS, save_settings
+from demolytics.settings import (
+    AppSettings,
+    DEFAULT_GLANCE_STATS,
+    SETTINGS_FORMAT_VERSION,
+    STANDARD_PLAYLIST_MODES,
+    save_settings,
+)
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+def _normalize_playlist_mode(mode: str) -> str:
+    if mode in STANDARD_PLAYLIST_MODES:
+        return mode
+    return "1v1"
+
 
 GLANCE_ICONS: dict[str, str] = {
     "shooting_percentage": "🎯",
@@ -58,9 +73,12 @@ class DemolyticsApp(ctk.CTk):
         self.event_queue: Queue[StatsEvent] = Queue()
         self.api_thread: StatsApiThread | None = None
         self.snapshot = self.aggregator.snapshot()
-        self.stat_value_labels: dict[str, ctk.CTkLabel] = {}
+        self.stat_live_personal_labels: dict[str, ctk.CTkLabel] = {}
+        self.stat_live_team_labels: dict[str, ctk.CTkLabel] = {}
         self.session_average_labels: dict[str, ctk.CTkLabel] = {}
         self.global_average_labels: dict[str, ctk.CTkLabel] = {}
+        self.stats_session_scope_label: ctk.CTkLabel | None = None
+        self.stats_global_scope_label: ctk.CTkLabel | None = None
         self.glance_value_labels: dict[str, ctk.CTkLabel] = {}
         self.glance_session_label: ctk.CTkLabel | None = None
         self.glance_streak_label: ctk.CTkLabel | None = None
@@ -72,6 +90,7 @@ class DemolyticsApp(ctk.CTk):
         self._lobby_session_id_for_encounters: str | None = None
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
+        self._comparison_mode_var = StringVar(value=_normalize_playlist_mode(settings.comparison_game_mode))
 
         self.title("Demolytics")
         self.geometry("1180x760")
@@ -253,16 +272,28 @@ class DemolyticsApp(ctk.CTk):
 
     def _build_stats_tab(self) -> None:
         self.stats_tab.grid_columnconfigure((0, 1, 2), weight=1, uniform="stats_tab")
-        self.stats_tab.grid_rowconfigure(0, weight=1)
+        self.stats_tab.grid_rowconfigure(0, weight=0)
+        self.stats_tab.grid_rowconfigure(1, weight=1)
 
-        live_frame = self._stats_column("Live Match", 0)
-        session_frame = self._stats_column("Session vs All-Time", 1)
-        global_frame = self._stats_column("You vs Encountered Average", 2)
+        self._build_live_match_column(column=0, row=0, rowspan=2)
+        self._build_comparison_mode_bar(row=0, column=1, columnspan=2)
+
+        session_frame, self.stats_session_scope_label = self._stats_column(
+            "Session vs All-Time",
+            column=1,
+            row=1,
+            show_mode_scope=True,
+        )
+        global_frame, self.stats_global_scope_label = self._stats_column(
+            "You vs Encountered Average",
+            column=2,
+            row=1,
+            show_mode_scope=True,
+        )
 
         for stat_key in self.settings.visible_stats:
             if stat_key not in SUPPORTED_STAT_KEYS:
                 continue
-            self.stat_value_labels[stat_key] = self._stat_row(live_frame, STAT_LABELS[stat_key], "--")
             self.session_average_labels[stat_key] = self._stat_row(
                 session_frame,
                 STAT_LABELS[stat_key],
@@ -274,11 +305,144 @@ class DemolyticsApp(ctk.CTk):
                 "-- / --",
             )
 
-    def _stats_column(self, title: str, column: int) -> ctk.CTkScrollableFrame:
-        frame = ctk.CTkScrollableFrame(self.stats_tab, label_text=title)
-        frame.grid(row=0, column=column, sticky="nsew", padx=8, pady=8)
+    def _build_comparison_mode_bar(self, row: int, column: int, columnspan: int) -> None:
+        bar = ctk.CTkFrame(self.stats_tab, fg_color=("gray88", "gray22"), corner_radius=8)
+        bar.grid(row=row, column=column, columnspan=columnspan, sticky="ew", padx=8, pady=(8, 4))
+        inner = ctk.CTkFrame(bar, fg_color="transparent")
+        inner.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(
+            inner,
+            text="Session & baseline use playlist:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        ).pack(side="left", padx=(0, 12))
+        for mode in STANDARD_PLAYLIST_MODES:
+            ctk.CTkRadioButton(
+                inner,
+                text=mode,
+                variable=self._comparison_mode_var,
+                value=mode,
+                command=self._on_comparison_mode_user_pick,
+            ).pack(side="left", padx=(0, 10))
+
+    def _on_comparison_mode_user_pick(self) -> None:
+        mode = _normalize_playlist_mode(self._comparison_mode_var.get())
+        if mode != self.settings.comparison_game_mode:
+            self.settings.comparison_game_mode = mode
+            save_settings(self.settings)
+        self._refresh_stats_tab(self.snapshot)
+
+    def _build_live_match_column(self, column: int, row: int, rowspan: int) -> None:
+        """Live Match column: tabbed You (personal) vs Teams to avoid stacked personal + both teams."""
+        wrapper = ctk.CTkFrame(self.stats_tab, fg_color="transparent")
+        wrapper.grid(row=row, column=column, rowspan=rowspan, sticky="nsew", padx=8, pady=8)
+        wrapper.grid_columnconfigure(0, weight=1)
+        wrapper.grid_rowconfigure(1, weight=1)
+
+        title_font = ctk.CTkFont(size=15, weight="bold")
+        ctk.CTkLabel(wrapper, text="Live Match", font=title_font, anchor="w").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=4,
+            pady=(0, 6),
+        )
+
+        live_tabs = ctk.CTkTabview(wrapper, anchor="w")
+        live_tabs.grid(row=1, column=0, sticky="nsew")
+
+        personal_tab = live_tabs.add("You")
+        teams_tab = live_tabs.add("Teams")
+
+        personal_scroll = ctk.CTkScrollableFrame(personal_tab)
+        personal_scroll.pack(fill="both", expand=True)
+        personal_scroll.grid_columnconfigure(1, weight=1)
+
+        teams_scroll = ctk.CTkScrollableFrame(teams_tab)
+        teams_scroll.pack(fill="both", expand=True)
+        teams_scroll.grid_columnconfigure(1, weight=1)
+
+        self.stat_live_personal_labels.clear()
+        self.stat_live_team_labels.clear()
+
+        has_personal = False
+        has_team = False
+        for stat_key in self.settings.visible_stats:
+            if stat_key not in STATS_TAB_COLUMN_KEYS:
+                continue
+            if stat_key.startswith("team_"):
+                has_team = True
+                self.stat_live_team_labels[stat_key] = self._stat_row(
+                    teams_scroll,
+                    STAT_LABELS[stat_key],
+                    "--",
+                )
+            else:
+                has_personal = True
+                self.stat_live_personal_labels[stat_key] = self._stat_row(
+                    personal_scroll,
+                    STAT_LABELS[stat_key],
+                    "--",
+                )
+
+        if not has_personal:
+            ctk.CTkLabel(
+                personal_scroll,
+                text="No player stats enabled. Add them under Stats columns in Settings.",
+                wraplength=300,
+                anchor="w",
+                justify="left",
+                text_color=("gray35", "gray70"),
+            ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=8)
+        if not has_team:
+            ctk.CTkLabel(
+                teams_scroll,
+                text="No team stats enabled. Add them under Stats columns in Settings.",
+                wraplength=300,
+                anchor="w",
+                justify="left",
+                text_color=("gray35", "gray70"),
+            ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=8)
+
+    def _stats_column(
+        self,
+        title: str,
+        column: int,
+        row: int,
+        *,
+        show_mode_scope: bool,
+    ) -> tuple[ctk.CTkScrollableFrame, ctk.CTkLabel | None]:
+        wrapper = ctk.CTkFrame(self.stats_tab, fg_color="transparent")
+        wrapper.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
+        wrapper.grid_columnconfigure(0, weight=1)
+
+        title_font = ctk.CTkFont(size=15, weight="bold")
+        ctk.CTkLabel(wrapper, text=title, font=title_font, anchor="w").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=4,
+            pady=(0, 2),
+        )
+        scope_label: ctk.CTkLabel | None = None
+        scroll_row = 1
+        if show_mode_scope:
+            scope_label = ctk.CTkLabel(
+                wrapper,
+                text="",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray35", "gray70"),
+                anchor="w",
+                justify="left",
+                wraplength=340,
+            )
+            scope_label.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
+            scroll_row = 2
+        wrapper.grid_rowconfigure(scroll_row, weight=1)
+        frame = ctk.CTkScrollableFrame(wrapper)
+        frame.grid(row=scroll_row, column=0, sticky="nsew")
         frame.grid_columnconfigure(1, weight=1)
-        return frame
+        return frame, scope_label
 
     def _stat_row(self, parent: ctk.CTkScrollableFrame, label: str, value: str) -> ctk.CTkLabel:
         row = parent.grid_size()[1]
@@ -457,35 +621,55 @@ class DemolyticsApp(ctk.CTk):
         if snapshot.session:
             self.record_label.configure(text=f"Session: {snapshot.session.wins} - {snapshot.session.losses}")
             self.mode_label.configure(text=f"Mode: {snapshot.session.game_mode}")
-            game_mode = snapshot.session.game_mode
             session_id = snapshot.session.session_id
         else:
             self.record_label.configure(text="Session: 0 - 0")
             self.mode_label.configure(text=f"Mode: {snapshot.current_game_mode}")
-            game_mode = None if snapshot.current_game_mode == "unknown" else snapshot.current_game_mode
             session_id = None
 
-        for stat_key, label in self.stat_value_labels.items():
-            if stat_key.startswith("team_"):
-                inner = team_stat_suffix(stat_key)
-                user_val = snapshot.user_team_stats.get(inner)
-                lines = [_format_stat(stat_key, user_val)]
-                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
-                    team_label = team.team_name or f"Team {team.team_num}"
-                    tv = team.stats.get(inner)
-                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
-            else:
-                user_val = snapshot.live_user_stats.get(stat_key)
-                lines = [_format_stat(stat_key, user_val)]
-                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
-                    team_label = team.team_name or f"Team {team.team_num}"
-                    tv = team.stats.get(stat_key)
-                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
-            label.configure(text="\n".join(lines), justify="right")
+        inferred: str | None = None
+        if snapshot.session:
+            inferred = snapshot.session.game_mode
+        elif snapshot.current_game_mode != "unknown":
+            inferred = snapshot.current_game_mode
+        if inferred in STANDARD_PLAYLIST_MODES and inferred != self.settings.comparison_game_mode:
+            self.settings.comparison_game_mode = inferred
+            self._comparison_mode_var.set(inferred)
+            save_settings(self.settings)
 
-        session_averages = self.repository.get_user_averages(game_mode=game_mode, session_id=session_id)
-        all_time_averages = self.repository.get_user_averages(game_mode=game_mode)
-        global_baseline = self.repository.get_global_baseline(game_mode=game_mode)
+        comparison_mode = _normalize_playlist_mode(self._comparison_mode_var.get())
+
+        for stat_key, label in self.stat_live_personal_labels.items():
+            user_val = snapshot.live_user_stats.get(stat_key)
+            label.configure(text=_format_stat(stat_key, user_val), justify="right")
+
+        for stat_key, label in self.stat_live_team_labels.items():
+            inner = team_stat_suffix(stat_key)
+            lines: list[str] = []
+            for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
+                team_label = team.team_name or f"Team {team.team_num}"
+                tv = team.stats.get(inner)
+                lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
+            label.configure(
+                text="\n".join(lines) if lines else "--",
+                justify="right",
+            )
+
+        session_averages = self.repository.get_user_averages(
+            game_mode=comparison_mode,
+            session_id=session_id,
+        )
+        all_time_averages = self.repository.get_user_averages(game_mode=comparison_mode)
+        global_baseline = self.repository.get_global_baseline(game_mode=comparison_mode)
+
+        if self.stats_session_scope_label is not None:
+            self.stats_session_scope_label.configure(
+                text=_stats_comparison_scope_caption(comparison_mode, "session"),
+            )
+        if self.stats_global_scope_label is not None:
+            self.stats_global_scope_label.configure(
+                text=_stats_comparison_scope_caption(comparison_mode, "global"),
+            )
 
         for stat_key, label in self.session_average_labels.items():
             value = _format_comparison(stat_key, session_averages.get(stat_key), all_time_averages.get(stat_key))
@@ -571,40 +755,109 @@ class DemolyticsApp(ctk.CTk):
     def _open_settings(self) -> None:
         modal = ctk.CTkToplevel(self)
         modal.title("Settings")
-        modal.geometry("480x720")
+        modal.geometry("520x700")
         modal.grab_set()
 
-        outer = ctk.CTkScrollableFrame(modal)
-        outer.pack(fill="both", expand=True, padx=16, pady=16)
+        body = ctk.CTkFrame(modal, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(12, 0))
 
-        ctk.CTkLabel(outer, text="Glance dashboard (during game)", font=ctk.CTkFont(weight="bold")).pack(
+        tabview = ctk.CTkTabview(body)
+        tabview.pack(fill="both", expand=True)
+
+        dash_tab = tabview.add("Dashboard")
+        glance_scroll = ctk.CTkScrollableFrame(dash_tab)
+        glance_scroll.pack(fill="both", expand=True)
+        glance_scroll.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            glance_scroll,
+            text="Stats shown on the Dashboard during a match",
+            font=ctk.CTkFont(size=13),
+            text_color=("gray35", "gray70"),
             anchor="w",
-            pady=(0, 6),
-        )
+        ).pack(anchor="w", padx=8, pady=(4, 10))
         glance_vars: dict[str, BooleanVar] = {}
         for stat in STAT_DEFINITIONS:
             if stat.key not in GLANCE_STAT_KEYS:
                 continue
             variable = BooleanVar(value=stat.key in self.settings.glance_stats)
-            checkbox = ctk.CTkCheckBox(outer, text=stat.label, variable=variable)
+            checkbox = ctk.CTkCheckBox(glance_scroll, text=stat.label, variable=variable)
             checkbox.pack(anchor="w", padx=8, pady=3)
             glance_vars[stat.key] = variable
 
-        ctk.CTkLabel(outer, text="Stats tab columns", font=ctk.CTkFont(weight="bold")).pack(
+        stats_tab_settings = tabview.add("Stats columns")
+        cols_scroll = ctk.CTkScrollableFrame(stats_tab_settings)
+        cols_scroll.pack(fill="both", expand=True)
+        cols_scroll.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            cols_scroll,
+            text="Live Match — You tab",
+            font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-            pady=(16, 6),
-        )
+        ).pack(anchor="w", padx=8, pady=(6, 4))
+        ctk.CTkLabel(
+            cols_scroll,
+            text="Per-player stats (your car). Session vs all-time columns only use these.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray35", "gray70"),
+            anchor="w",
+            wraplength=440,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
         variables: dict[str, BooleanVar] = {}
         for stat in STAT_DEFINITIONS:
+            if not stat.supported:
+                continue
             variable = BooleanVar(value=stat.key in self.settings.visible_stats)
-            checkbox = ctk.CTkCheckBox(
-                outer,
-                text=stat.label if stat.supported else f"{stat.label} (future)",
-                variable=variable,
-                state="normal" if stat.supported else "disabled",
-            )
+            checkbox = ctk.CTkCheckBox(cols_scroll, text=stat.label, variable=variable)
             checkbox.pack(anchor="w", padx=8, pady=3)
             variables[stat.key] = variable
+
+        ctk.CTkLabel(
+            cols_scroll,
+            text="Live Match — Teams tab",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+        ).pack(anchor="w", padx=8, pady=(16, 4))
+        ctk.CTkLabel(
+            cols_scroll,
+            text="Orange vs blue team totals. Not used in the comparison columns.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray35", "gray70"),
+            anchor="w",
+            wraplength=440,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        for stat in STAT_DEFINITIONS:
+            if not stat.key.startswith("team_"):
+                continue
+            variable = BooleanVar(value=stat.key in self.settings.visible_stats)
+            checkbox = ctk.CTkCheckBox(cols_scroll, text=stat.label, variable=variable)
+            checkbox.pack(anchor="w", padx=8, pady=3)
+            variables[stat.key] = variable
+
+        data_tab = tabview.add("Data")
+        data_inner = ctk.CTkFrame(data_tab, fg_color="transparent")
+        data_inner.pack(fill="both", expand=True, padx=8, pady=8)
+        ctk.CTkLabel(
+            data_inner,
+            text=(
+                "Deletes all saved matches, per-match player rows, sessions, and encounter counts "
+                "from the local database. Your Settings file is not removed."
+            ),
+            wraplength=440,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 12))
+        ctk.CTkButton(
+            data_inner,
+            text="Reset all statistics…",
+            fg_color="#8b3a3a",
+            command=lambda: (modal.destroy(), self._confirm_reset_database()),
+        ).pack(anchor="w")
 
         def save() -> None:
             self.settings.glance_stats = [
@@ -613,24 +866,20 @@ class DemolyticsApp(ctk.CTk):
             if not self.settings.glance_stats:
                 self.settings.glance_stats = list(DEFAULT_GLANCE_STATS)
             self.settings.visible_stats = [
-                key for key, variable in variables.items() if variable.get() and key in SUPPORTED_STAT_KEYS
+                key for key, variable in variables.items() if variable.get() and key in STATS_TAB_COLUMN_KEYS
             ]
+            if not self.settings.visible_stats:
+                self.settings.visible_stats = list(DEFAULT_STATS_TAB_VISIBLE)
+            self.settings.settings_format_version = SETTINGS_FORMAT_VERSION
             save_settings(self.settings)
             modal.destroy()
             self._rebuild_glance_tab()
             self._rebuild_stats_tab()
 
         btn_row = ctk.CTkFrame(modal, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        btn_row.pack(fill="x", padx=16, pady=(8, 12))
         ctk.CTkButton(btn_row, text="Save", command=save).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            btn_row,
-            text="Reset all statistics…",
-            fg_color="#8b3a3a",
-            command=lambda: (modal.destroy(), self._confirm_reset_database()),
-        ).pack(
-            side="left",
-        )
+        ctk.CTkButton(btn_row, text="Cancel", command=modal.destroy).pack(side="left")
 
     def _confirm_reset_database(self) -> None:
         confirm = ctk.CTkToplevel(self)
@@ -686,9 +935,13 @@ class DemolyticsApp(ctk.CTk):
     def _rebuild_stats_tab(self) -> None:
         for child in self.stats_tab.winfo_children():
             child.destroy()
-        self.stat_value_labels.clear()
+        self.stat_live_personal_labels.clear()
+        self.stat_live_team_labels.clear()
         self.session_average_labels.clear()
         self.global_average_labels.clear()
+        self.stats_session_scope_label = None
+        self.stats_global_scope_label = None
+        self._comparison_mode_var.set(_normalize_playlist_mode(self.settings.comparison_game_mode))
         self._build_stats_tab()
         self._refresh_stats_tab(self.snapshot)
 
@@ -703,6 +956,23 @@ class DemolyticsApp(ctk.CTk):
         if self.api_thread is not None:
             self.api_thread.stop()
         self.destroy()
+
+
+def _stats_comparison_scope_caption(
+    comparison_mode: str,
+    column: str,
+) -> str:
+    """Explains session / baseline columns use the playlist selected above (or auto from lobby)."""
+    mode = _normalize_playlist_mode(comparison_mode)
+    if column == "session":
+        return (
+            f"{mode}: this session's per-game average vs your all-time per-game average in {mode} "
+            f"(playlist chosen above; lobby may switch it automatically)."
+        )
+    return (
+        f"{mode}: your all-time per-game average vs the average for other players recorded in your "
+        f"{mode} matches (everyone except you in those games)."
+    )
 
 
 def _format_comparison(stat_key: str, left: float | None, right: float | None) -> str:
