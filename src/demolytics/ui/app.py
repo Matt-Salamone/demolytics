@@ -271,23 +271,33 @@ class DemolyticsApp(ctk.CTk):
         lobby_section.grid_rowconfigure(1, weight=1)
 
     def _build_stats_tab(self) -> None:
-        self.stats_tab.grid_columnconfigure((0, 1, 2), weight=1, uniform="stats_tab")
+        self.stats_tab.grid_columnconfigure(0, weight=1)
         self.stats_tab.grid_rowconfigure(0, weight=0)
         self.stats_tab.grid_rowconfigure(1, weight=1)
 
-        self._build_live_match_column(column=0, row=0, rowspan=2)
-        self._build_comparison_mode_bar(row=0, column=1, columnspan=2)
+        self._build_comparison_mode_bar(row=0, column=0)
+
+        self.stats_subtab_view = ctk.CTkTabview(self.stats_tab)
+        self.stats_subtab_view.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+        live_parent = self.stats_subtab_view.add("Live Match")
+        session_parent = self.stats_subtab_view.add("Session vs All-Time")
+        global_parent = self.stats_subtab_view.add("You vs Encountered Average")
+
+        for tab_body in (session_parent, global_parent):
+            tab_body.grid_columnconfigure(0, weight=1)
+            tab_body.grid_rowconfigure(0, weight=1)
+
+        self._build_live_match_panel(live_parent)
 
         session_frame, self.stats_session_scope_label = self._stats_column(
+            session_parent,
             "Session vs All-Time",
-            column=1,
-            row=1,
             show_mode_scope=True,
         )
         global_frame, self.stats_global_scope_label = self._stats_column(
+            global_parent,
             "You vs Encountered Average",
-            column=2,
-            row=1,
             show_mode_scope=True,
         )
 
@@ -305,9 +315,9 @@ class DemolyticsApp(ctk.CTk):
                 "-- / --",
             )
 
-    def _build_comparison_mode_bar(self, row: int, column: int, columnspan: int) -> None:
+    def _build_comparison_mode_bar(self, row: int, column: int) -> None:
         bar = ctk.CTkFrame(self.stats_tab, fg_color=("gray88", "gray22"), corner_radius=8)
-        bar.grid(row=row, column=column, columnspan=columnspan, sticky="ew", padx=8, pady=(8, 4))
+        bar.grid(row=row, column=column, sticky="ew", padx=8, pady=(8, 4))
         inner = ctk.CTkFrame(bar, fg_color="transparent")
         inner.pack(fill="x", padx=10, pady=8)
         ctk.CTkLabel(
@@ -332,34 +342,26 @@ class DemolyticsApp(ctk.CTk):
             save_settings(self.settings)
         self._refresh_stats_tab(self.snapshot)
 
-    def _build_live_match_column(self, column: int, row: int, rowspan: int) -> None:
-        """Live Match column: tabbed You (personal) vs Teams to avoid stacked personal + both teams."""
-        wrapper = ctk.CTkFrame(self.stats_tab, fg_color="transparent")
-        wrapper.grid(row=row, column=column, rowspan=rowspan, sticky="nsew", padx=8, pady=8)
-        wrapper.grid_columnconfigure(0, weight=1)
-        wrapper.grid_rowconfigure(1, weight=1)
+    def _build_live_match_panel(self, parent: ctk.CTkFrame) -> None:
+        """Live Match: You and Teams side by side."""
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_columnconfigure(1, weight=1)
+        parent.grid_rowconfigure(1, weight=1)
 
         title_font = ctk.CTkFont(size=15, weight="bold")
-        ctk.CTkLabel(wrapper, text="Live Match", font=title_font, anchor="w").grid(
-            row=0,
-            column=0,
-            sticky="w",
-            padx=4,
-            pady=(0, 6),
+        ctk.CTkLabel(parent, text="You", font=title_font, anchor="w").grid(
+            row=0, column=0, sticky="w", padx=8, pady=(8, 4)
+        )
+        ctk.CTkLabel(parent, text="Teams", font=title_font, anchor="w").grid(
+            row=0, column=1, sticky="w", padx=8, pady=(8, 4)
         )
 
-        live_tabs = ctk.CTkTabview(wrapper, anchor="w")
-        live_tabs.grid(row=1, column=0, sticky="nsew")
-
-        personal_tab = live_tabs.add("You")
-        teams_tab = live_tabs.add("Teams")
-
-        personal_scroll = ctk.CTkScrollableFrame(personal_tab)
-        personal_scroll.pack(fill="both", expand=True)
+        personal_scroll = ctk.CTkScrollableFrame(parent)
+        personal_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         personal_scroll.grid_columnconfigure(1, weight=1)
 
-        teams_scroll = ctk.CTkScrollableFrame(teams_tab)
-        teams_scroll.pack(fill="both", expand=True)
+        teams_scroll = ctk.CTkScrollableFrame(parent)
+        teams_scroll.grid(row=1, column=1, sticky="nsew", padx=8, pady=(0, 8))
         teams_scroll.grid_columnconfigure(1, weight=1)
 
         self.stat_live_personal_labels.clear()
@@ -406,14 +408,13 @@ class DemolyticsApp(ctk.CTk):
 
     def _stats_column(
         self,
+        parent: ctk.CTkFrame,
         title: str,
-        column: int,
-        row: int,
         *,
         show_mode_scope: bool,
     ) -> tuple[ctk.CTkScrollableFrame, ctk.CTkLabel | None]:
-        wrapper = ctk.CTkFrame(self.stats_tab, fg_color="transparent")
-        wrapper.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
+        wrapper = ctk.CTkFrame(parent, fg_color="transparent")
+        wrapper.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         wrapper.grid_columnconfigure(0, weight=1)
 
         title_font = ctk.CTkFont(size=15, weight="bold")
@@ -434,7 +435,7 @@ class DemolyticsApp(ctk.CTk):
                 text_color=("gray35", "gray70"),
                 anchor="w",
                 justify="left",
-                wraplength=340,
+                wraplength=480,
             )
             scope_label.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
             scroll_row = 2
@@ -444,7 +445,7 @@ class DemolyticsApp(ctk.CTk):
         frame.grid_columnconfigure(1, weight=1)
         return frame, scope_label
 
-    def _stat_row(self, parent: ctk.CTkScrollableFrame, label: str, value: str) -> ctk.CTkLabel:
+    def _stat_row(self, parent: ctk.CTkFrame, label: str, value: str) -> ctk.CTkLabel:
         row = parent.grid_size()[1]
         ctk.CTkLabel(parent, text=label, anchor="w").grid(row=row, column=0, sticky="w", padx=8, pady=4)
         value_label = ctk.CTkLabel(parent, text=value, anchor="e", font=ctk.CTkFont(weight="bold"))
@@ -738,19 +739,41 @@ class DemolyticsApp(ctk.CTk):
     def _show_match_details(self, match_guid: str) -> None:
         detail = ctk.CTkToplevel(self)
         detail.title("Match Details")
-        detail.geometry("760x540")
-        frame = ctk.CTkScrollableFrame(detail, label_text=match_guid)
-        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        detail.geometry("960x640")
+        detail.minsize(520, 400)
+        outer = ctk.CTkScrollableFrame(detail, label_text=match_guid)
+        outer.pack(fill="both", expand=True, padx=16, pady=16)
+        outer.grid_columnconfigure(0, weight=1)
         players = self.repository.get_match_players(match_guid)
         for index, player in enumerate(players):
-            text = _player_detail_text(player)
-            ctk.CTkLabel(frame, text=text, justify="left", anchor="w").grid(
-                row=index,
-                column=0,
-                sticky="ew",
-                padx=8,
-                pady=8,
+            card = ctk.CTkFrame(outer, fg_color=("gray85", "gray20"), corner_radius=10)
+            card.grid(row=index, column=0, sticky="ew", padx=4, pady=10)
+            card.grid_columnconfigure(0, weight=1)
+            user_label = "User" if player["is_user"] else "Player"
+            header = (
+                f"{user_label}: {player['player_name']} ({player['primary_id']})\n"
+                f"Team: {player['team_num']}"
             )
+            ctk.CTkLabel(card, text=header, anchor="w", justify="left").grid(
+                row=0, column=0, sticky="w", padx=12, pady=(10, 8)
+            )
+            stats_inner = ctk.CTkFrame(card, fg_color="transparent")
+            stats_inner.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 12))
+            stats_inner.grid_columnconfigure(1, weight=1)
+            row_i = 0
+            for key in SUPPORTED_STAT_KEYS:
+                if key not in player.keys():
+                    continue
+                ctk.CTkLabel(stats_inner, text=STAT_LABELS[key], anchor="w").grid(
+                    row=row_i, column=0, sticky="w", padx=8, pady=3
+                )
+                ctk.CTkLabel(
+                    stats_inner,
+                    text=_format_stat(key, player[key]),
+                    anchor="e",
+                    font=ctk.CTkFont(weight="bold"),
+                ).grid(row=row_i, column=1, sticky="e", padx=8, pady=3)
+                row_i += 1
 
     def _open_settings(self) -> None:
         modal = ctk.CTkToplevel(self)
@@ -792,7 +815,7 @@ class DemolyticsApp(ctk.CTk):
 
         ctk.CTkLabel(
             cols_scroll,
-            text="Live Match — You tab",
+            text="Live Match — You column",
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
         ).pack(anchor="w", padx=8, pady=(6, 4))
@@ -817,7 +840,7 @@ class DemolyticsApp(ctk.CTk):
 
         ctk.CTkLabel(
             cols_scroll,
-            text="Live Match — Teams tab",
+            text="Live Match — Teams column",
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
         ).pack(anchor="w", padx=8, pady=(16, 4))
@@ -997,16 +1020,3 @@ def _format_stat(stat_key: str, value: float | None) -> str:
         return f"{value:.1f}"
     return f"{value:.0f}"
 
-
-def _player_detail_text(player: Any) -> str:
-    stats = [
-        f"{STAT_LABELS[key]}: {_format_stat(key, player[key])}"
-        for key in SUPPORTED_STAT_KEYS
-        if key in player.keys()
-    ]
-    user_label = "User" if player["is_user"] else "Player"
-    return (
-        f"{user_label}: {player['player_name']} ({player['primary_id']})\n"
-        f"Team: {player['team_num']}\n"
-        + "  |  ".join(stats)
-    )
