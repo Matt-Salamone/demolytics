@@ -193,6 +193,7 @@ def _parse_player_state(data: dict[str, Any]) -> PlayerState:
     on_ground = _optional_bool(data.get("bOnGround"))
     if on_ground is None:
         on_ground = _optional_bool(data.get("bHasWheelContact"))
+    speed = _optional_float(data.get("Speed"))
     return PlayerState(
         name=str(data.get("Name", "")),
         primary_id=str(data.get("PrimaryId", "")),
@@ -207,8 +208,8 @@ def _parse_player_state(data: dict[str, Any]) -> PlayerState:
         car_touches=_int(data.get("CarTouches")),
         demos=_int(data.get("Demos")),
         has_car=_optional_bool(data.get("bHasCar")),
-        speed=_optional_float(data.get("Speed")),
-        boost=_optional_int(data.get("Boost")),
+        speed=speed,
+        boost=_parse_player_boost_field(data, speed),
         boosting=_optional_bool(data.get("bBoosting")),
         on_ground=on_ground,
         on_wall=_optional_bool(data.get("bOnWall")),
@@ -290,6 +291,33 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_boost_percent(value: Any) -> int | None:
+    """Parse Boost as an integer percent 0-100 (handles RL Stats API int and normalized float 0-1)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    if x != x:  # NaN
+        return None
+    # JSON integers are int in Python; distinguish from float so `1` stays 1%, `1.0` can mean 100%.
+    if type(value) is int:
+        return max(0, min(100, value))
+    if 0.0 <= x <= 1.0:
+        return int(round(x * 100.0))
+    return int(round(max(0.0, min(100.0, x))))
+
+
+def _parse_player_boost_field(data: dict[str, Any], speed: float | None) -> int | None:
+    """When Boost is omitted but Speed is present, treat boost as 0 (Stats API often drops Boost at empty)."""
+    if "Boost" in data:
+        return _optional_boost_percent(data["Boost"])
+    if speed is not None:
+        return 0
+    return None
 
 
 def _optional_bool(value: Any) -> bool | None:

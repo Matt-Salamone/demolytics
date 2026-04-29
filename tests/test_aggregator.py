@@ -61,6 +61,19 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(second_result.snapshot.live_user_stats["avg_speed"], 1300)
         self.assertEqual(second_result.snapshot.live_user_stats["time_boosting"], 2)
 
+    def test_time_zero_boost_when_boost_key_omitted_at_empty(self) -> None:
+        """Empty tank often arrives without a Boost key; infer 0 when Speed is present."""
+        aggregator = DemolyticsAggregator()
+        base = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        del base["Data"]["Players"][0]["Boost"]
+        first = parse_message(base)
+        aggregator.handle_event(first, datetime(2026, 1, 1, tzinfo=UTC))
+        second_payload = copy.deepcopy(base)
+        second_payload["Data"]["Game"]["Elapsed"] = 12
+        second = parse_message(second_payload)
+        aggregator.handle_event(second, datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC))
+        self.assertGreater(aggregator.snapshot().live_user_stats["time_zero_boost"], 0.0)
+
     def test_match_completion_includes_user_result(self) -> None:
         aggregator = DemolyticsAggregator()
         payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))

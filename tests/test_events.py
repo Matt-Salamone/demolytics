@@ -9,6 +9,7 @@ from demolytics.domain.events import (
     MatchLifecycleEvent,
     StatfeedEvent,
     UpdateStateEvent,
+    _optional_boost_percent,
     parse_message,
 )
 
@@ -105,6 +106,87 @@ class EventParsingTests(unittest.TestCase):
         self.assertEqual(event.match_guid, "MG-REPLAY")
         self.assertEqual(event.data.get("ReplayName"), "MyReplay")
         self.assertEqual(event.data.get("Extra"), 1)
+
+    def test_optional_boost_percent_integer_vs_normalized_float(self) -> None:
+        self.assertEqual(_optional_boost_percent(0), 0)
+        self.assertEqual(_optional_boost_percent(1), 1)
+        self.assertEqual(_optional_boost_percent(45), 45)
+        self.assertEqual(_optional_boost_percent(0.45), 45)
+        self.assertEqual(_optional_boost_percent(1.0), 100)
+        self.assertEqual(_optional_boost_percent(45.2), 45)
+
+    def test_boost_omitted_implies_zero_when_speed_present(self) -> None:
+        """Stats API often drops Boost at empty; omitting Boost while Speed exists implies 0%."""
+        payload = {
+            "Event": "UpdateState",
+            "Data": {
+                "MatchGuid": "MG",
+                "Players": [
+                    {
+                        "Name": "Local",
+                        "PrimaryId": "Steam|1|0",
+                        "Shortcut": 1,
+                        "TeamNum": 0,
+                        "Score": 0,
+                        "Goals": 0,
+                        "Shots": 0,
+                        "Assists": 0,
+                        "Saves": 0,
+                        "Touches": 0,
+                        "CarTouches": 0,
+                        "Demos": 0,
+                        "Speed": 1200,
+                    },
+                ],
+                "Game": {
+                    "Teams": [
+                        {"Name": "Blue", "TeamNum": 0, "Score": 0},
+                        {"Name": "Orange", "TeamNum": 1, "Score": 0},
+                    ],
+                    "Elapsed": 0,
+                },
+            },
+        }
+        event = parse_message(payload)
+        self.assertIsInstance(event, UpdateStateEvent)
+        assert isinstance(event, UpdateStateEvent)
+        self.assertEqual(event.players[0].boost, 0)
+
+    def test_boost_explicit_null_stays_unknown(self) -> None:
+        payload = {
+            "Event": "UpdateState",
+            "Data": {
+                "MatchGuid": "MG",
+                "Players": [
+                    {
+                        "Name": "Local",
+                        "PrimaryId": "Steam|1|0",
+                        "Shortcut": 1,
+                        "TeamNum": 0,
+                        "Score": 0,
+                        "Goals": 0,
+                        "Shots": 0,
+                        "Assists": 0,
+                        "Saves": 0,
+                        "Touches": 0,
+                        "CarTouches": 0,
+                        "Demos": 0,
+                        "Speed": 1200,
+                        "Boost": None,
+                    },
+                ],
+                "Game": {
+                    "Teams": [
+                        {"Name": "Blue", "TeamNum": 0, "Score": 0},
+                        {"Name": "Orange", "TeamNum": 1, "Score": 0},
+                    ],
+                    "Elapsed": 0,
+                },
+            },
+        }
+        event = parse_message(payload)
+        assert isinstance(event, UpdateStateEvent)
+        self.assertIsNone(event.players[0].boost)
 
 
 if __name__ == "__main__":
