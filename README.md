@@ -14,6 +14,8 @@ Run the app with:
 
 ```bash
 demolytics
+# or
+.venv/Scripts/python -m demolytics.main
 ```
 
 Rocket League must have `TAGame\Config\DefaultStatsAPI.ini` configured with `PacketSendRate > 0` before live data is available.

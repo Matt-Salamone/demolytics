@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+from demolytics.domain.stats import GLANCE_STAT_KEYS, SUPPORTED_STAT_KEYS
 
 APP_DIR_NAME = "Demolytics"
 SETTINGS_FILE_NAME = "settings.json"
@@ -14,8 +14,8 @@ DEFAULT_PORT = 49123
 
 DEFAULT_GLANCE_STATS: tuple[str, ...] = (
     "shooting_percentage",
-    "demos_inflicted",
-    "demos_taken",
+    "team_demos_inflicted",
+    "team_demos_taken",
     "avg_boost",
     "avg_speed",
     "airborne_percentage",
@@ -76,7 +76,7 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
     glance_stats = raw.get("glance_stats")
     if not isinstance(glance_stats, list):
         glance_stats = list(DEFAULT_GLANCE_STATS)
-    glance_stats = [str(key) for key in glance_stats if str(key) in SUPPORTED_STAT_KEYS]
+    glance_stats = [str(key) for key in glance_stats if str(key) in GLANCE_STAT_KEYS]
     if not glance_stats:
         glance_stats = list(DEFAULT_GLANCE_STATS)
 

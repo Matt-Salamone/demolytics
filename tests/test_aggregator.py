@@ -192,7 +192,7 @@ class AggregatorTests(unittest.TestCase):
         )
         self.assertAlmostEqual(agg.current_match.duration_seconds, 5.0)
 
-    def test_countdown_resumes_stat_tracking(self) -> None:
+    def test_kickoff_countdown_skips_until_round_started(self) -> None:
         p1 = PlayerState(
             name="A",
             primary_id="Steam|1|0",
@@ -209,29 +209,54 @@ class AggregatorTests(unittest.TestCase):
             speed=500.0,
             boost=50,
         )
-        teams = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+        teams_start = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+        teams_after_goal = (TeamState("Blue", 0, 1), TeamState("Orange", 1, 0))
         agg = DemolyticsAggregator()
         t0 = datetime(2026, 1, 1, tzinfo=UTC)
-        agg.handle_event(UpdateStateEvent("M8", (p1, p2), GameState(teams=teams, elapsed=0.0)), t0)
+        agg.handle_event(UpdateStateEvent("M8", (p1, p2), GameState(teams=teams_start, elapsed=0.0)), t0)
         agg.handle_event(
-            UpdateStateEvent("M8", (p1, p2), GameState(teams=teams, elapsed=10.0)),
+            UpdateStateEvent("M8", (p1, p2), GameState(teams=teams_start, elapsed=5.0)),
             datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        )
+        agg.handle_event(
+            UpdateStateEvent("M8", (p1, p2), GameState(teams=teams_start, elapsed=10.0)),
+            datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+        )
+        assert agg.current_match is not None
+        self.assertAlmostEqual(agg.current_match.duration_seconds, 10.0)
+        agg.handle_event(
+            UpdateStateEvent(
+                "M8",
+                (p1, p2),
+                GameState(teams=teams_after_goal, elapsed=12.0, replay=True),
+            ),
+            datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
         )
         agg.handle_event(
             UpdateStateEvent(
                 "M8",
                 (p1, p2),
-                GameState(teams=teams, elapsed=20.0, has_winner=True),
+                GameState(teams=teams_after_goal, elapsed=14.0),
             ),
-            datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
-        )
-        agg.handle_event(MatchLifecycleEvent(event_name="CountdownBegin", match_guid="M8"), t0)
-        agg.handle_event(
-            UpdateStateEvent("M8", (p1, p2), GameState(teams=teams, elapsed=25.0)),
             datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
         )
-        assert agg.current_match is not None
         self.assertAlmostEqual(agg.current_match.duration_seconds, 10.0)
+        agg.handle_event(MatchLifecycleEvent(event_name="CountdownBegin", match_guid="M8"), t0)
+        agg.handle_event(
+            UpdateStateEvent(
+                "M8",
+                (p1, p2),
+                GameState(teams=teams_after_goal, elapsed=16.0),
+            ),
+            datetime(2026, 1, 1, 0, 0, 4, tzinfo=UTC),
+        )
+        self.assertAlmostEqual(agg.current_match.duration_seconds, 10.0)
+        agg.handle_event(MatchLifecycleEvent(event_name="RoundStarted", match_guid="M8"), t0)
+        agg.handle_event(
+            UpdateStateEvent("M8", (p1, p2), GameState(teams=teams_after_goal, elapsed=18.0)),
+            datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC),
+        )
+        self.assertAlmostEqual(agg.current_match.duration_seconds, 12.0)
 
     def test_airborne_counts_when_on_ground_none_in_ranked_match(self) -> None:
         p1 = PlayerState(
@@ -282,6 +307,236 @@ class AggregatorTests(unittest.TestCase):
         self.assertAlmostEqual(user.time_airborne, 4.0)
         snap = user.snapshot(opposing_score=0, is_user=True)
         self.assertGreater(snap.stats["airborne_percentage"], 0.0)
+
+    def test_session_outcome_inferred_when_match_ended_missing(self) -> None:
+        """Leaving before the end screen often skips MatchEnded; infer W/L from team scores."""
+        aggregator = DemolyticsAggregator()
+        payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        aggregator.handle_event(parse_message(payload), datetime(2026, 1, 1, tzinfo=UTC))
+        completed = aggregator.handle_event(
+            MatchLifecycleEvent(event_name="MatchDestroyed", match_guid="MATCH-1"),
+            datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+        ).completed_match
+        self.assertIsNotNone(completed)
+        assert completed is not None
+        self.assertEqual(completed.user_result, "Win")
+        self.assertEqual(aggregator.snapshot().session.wins, 1)
+        self.assertEqual(aggregator.snapshot().session.losses, 0)
+
+    def test_session_not_double_counted_match_ended_then_destroy(self) -> None:
+        aggregator = DemolyticsAggregator()
+        payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        aggregator.handle_event(parse_message(payload), datetime(2026, 1, 1, tzinfo=UTC))
+        aggregator.handle_event(
+            parse_message({"Event": "MatchEnded", "Data": {"MatchGuid": "MATCH-1", "WinnerTeamNum": 0}})
+        )
+        aggregator.handle_event(
+            MatchLifecycleEvent(event_name="MatchDestroyed", match_guid="MATCH-1"),
+            datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+        )
+        self.assertEqual(aggregator.snapshot().session.wins, 1)
+        self.assertEqual(aggregator.snapshot().session.losses, 0)
+
+    def test_session_outcome_when_switching_match_guid_before_destroy(self) -> None:
+        """Going to freeplay/training can change MatchGuid in UpdateState before MatchDestroyed."""
+        p1 = PlayerState(
+            name="A",
+            primary_id="Steam|1|0",
+            shortcut=1,
+            team_num=0,
+            goals=2,
+        )
+        p2 = PlayerState(name="B", primary_id="Steam|2|0", shortcut=2, team_num=1)
+        teams = (TeamState("Blue", 0, 3), TeamState("Orange", 1, 1))
+        agg = DemolyticsAggregator()
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        agg.handle_event(
+            UpdateStateEvent(
+                "MATCH-A",
+                (p1, p2),
+                GameState(
+                    teams=teams,
+                    elapsed=0.0,
+                    target=PlayerRef(name="A", shortcut=1, team_num=0),
+                ),
+            ),
+            t0,
+        )
+        solo = PlayerState(name="A", primary_id="Steam|1|0", shortcut=1, team_num=0, goals=0)
+        agg.handle_event(
+            UpdateStateEvent(
+                "MATCH-B",
+                (solo,),
+                GameState(teams=(TeamState("Blue", 0, 0),), elapsed=0.0),
+            ),
+            datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        )
+        self.assertEqual(agg.snapshot().session.wins, 1)
+        self.assertEqual(agg.snapshot().live_user_stats.get("goals"), 2.0)
+
+    def test_freeplay_after_ranked_same_match_guid_keeps_scoreboard(self) -> None:
+        """RL may keep MatchGuid briefly; freeplay UpdateState must not zero scoreboard stats."""
+        p1 = PlayerState(
+            name="A",
+            primary_id="Steam|1|0",
+            shortcut=1,
+            team_num=0,
+            goals=3,
+            score=100,
+        )
+        p2 = PlayerState(name="B", primary_id="Steam|2|0", shortcut=2, team_num=1)
+        teams = (TeamState("Blue", 0, 1), TeamState("Orange", 1, 0))
+        agg = DemolyticsAggregator()
+        agg.handle_event(
+            UpdateStateEvent(
+                "SAME-GUID",
+                (p1, p2),
+                GameState(teams=teams, elapsed=0.0, target=PlayerRef(name="A", shortcut=1, team_num=0)),
+            ),
+            datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        solo = PlayerState(
+            name="A",
+            primary_id="Steam|1|0",
+            shortcut=1,
+            team_num=0,
+            goals=0,
+            score=0,
+        )
+        agg.handle_event(
+            UpdateStateEvent(
+                "SAME-GUID",
+                (solo,),
+                GameState(teams=(TeamState("Blue", 0, 0),), elapsed=1.0),
+            ),
+            datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        )
+        self.assertEqual(agg.snapshot().live_user_stats.get("goals"), 3.0)
+        self.assertEqual(agg.snapshot().live_user_stats.get("score"), 100.0)
+
+    def test_frozen_user_stats_between_completed_match_and_next_match(self) -> None:
+        aggregator = DemolyticsAggregator()
+        payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        aggregator.handle_event(parse_message(payload), datetime(2026, 1, 1, tzinfo=UTC))
+        live_goals = aggregator.snapshot().live_user_stats.get("goals")
+        aggregator.handle_event(
+            MatchLifecycleEvent(event_name="MatchDestroyed", match_guid="MATCH-1"),
+            datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+        )
+        frozen = aggregator.snapshot().live_user_stats.get("goals")
+        self.assertEqual(frozen, live_goals)
+        aggregator.handle_event(
+            MatchLifecycleEvent(event_name="MatchInitialized", match_guid="MATCH-2"),
+            datetime(2026, 1, 1, 0, 6, tzinfo=UTC),
+        )
+        self.assertEqual(aggregator.snapshot().live_user_stats.get("goals"), frozen)
+
+    def test_user_inferred_when_only_one_player_has_speed_and_boost(self) -> None:
+        """RL often omits car telemetry for remote players; the local client is usually the only fully sampled car."""
+        local = PlayerState(
+            name="Me",
+            primary_id="Steam|9|0",
+            shortcut=1,
+            team_num=0,
+            boost=50,
+            speed=1000.0,
+            on_ground=True,
+        )
+        remote = PlayerState(
+            name="Other",
+            primary_id="Steam|8|0",
+            shortcut=2,
+            team_num=1,
+            boost=None,
+            speed=None,
+            on_ground=True,
+        )
+        teams = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+        agg = DemolyticsAggregator()
+        agg.handle_event(
+            UpdateStateEvent(
+                "M1",
+                (local, remote),
+                GameState(teams=teams, elapsed=0.0, target=None),
+            ),
+            datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        self.assertEqual(agg.user_primary_id, "Steam|9|0")
+
+    def test_team_snapshots_sums_and_derived_stats(self) -> None:
+        teams = (TeamState("Blue", 0, 2), TeamState("Orange", 1, 1))
+        players = (
+            PlayerState(
+                name="A0",
+                primary_id="Steam|a|0",
+                shortcut=1,
+                team_num=0,
+                goals=1,
+                shots=4,
+                boost=50,
+                speed=1000,
+                on_ground=True,
+                demos=2,
+            ),
+            PlayerState(
+                name="A1",
+                primary_id="Steam|b|0",
+                shortcut=2,
+                team_num=0,
+                goals=0,
+                shots=2,
+                boost=80,
+                speed=500,
+                on_ground=True,
+                demos=1,
+            ),
+            PlayerState(
+                name="O0",
+                primary_id="Steam|c|0",
+                shortcut=3,
+                team_num=1,
+                goals=1,
+                shots=1,
+                boost=20,
+                speed=200,
+                on_ground=True,
+                demos=0,
+            ),
+            PlayerState(
+                name="O1",
+                primary_id="Steam|d|0",
+                shortcut=4,
+                team_num=1,
+                goals=0,
+                shots=0,
+                boost=30,
+                speed=200,
+                on_ground=True,
+                demos=0,
+            ),
+        )
+        agg = DemolyticsAggregator(user_primary_id="Steam|a|0")
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        agg.handle_event(UpdateStateEvent("TM", players, GameState(teams=teams, elapsed=0.0)), t0)
+        agg.handle_event(
+            UpdateStateEvent("TM", players, GameState(teams=teams, elapsed=10.0)),
+            datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        )
+        snap = agg.snapshot()
+        self.assertEqual(len(snap.live_teams), 2)
+        blue = next(t for t in snap.live_teams if t.team_num == 0)
+        orange = next(t for t in snap.live_teams if t.team_num == 1)
+        self.assertTrue(blue.is_user_team)
+        self.assertFalse(orange.is_user_team)
+        self.assertEqual(blue.stats["score"], 2.0)
+        self.assertEqual(blue.stats["goals_conceded"], 1.0)
+        self.assertEqual(blue.stats["demos_inflicted"], 3.0)
+        self.assertEqual(blue.stats["shots"], 6.0)
+        self.assertEqual(blue.stats["goals"], 1.0)
+        self.assertAlmostEqual(blue.stats["shooting_percentage"], 100.0 / 6.0)
+        self.assertAlmostEqual(blue.stats["avg_boost"], 65.0)
+        self.assertAlmostEqual(orange.stats["avg_boost"], 25.0)
+        self.assertAlmostEqual(orange.stats["shooting_percentage"], 100.0)
 
     def test_win_streak_on_session(self) -> None:
         aggregator = DemolyticsAggregator()

@@ -40,10 +40,41 @@ STAT_DEFINITIONS: tuple[StatDefinition, ...] = (
     StatDefinition("pads_collected_big", "Big Pads Collected", supported=False),
     StatDefinition("pads_collected_small", "Small Pads Collected", supported=False),
     StatDefinition("boost_stolen", "Boost Stolen", supported=False),
+    StatDefinition("team_score", "Team Score", "", False),
+    StatDefinition("team_goals", "Team Goals", "", False),
+    StatDefinition("team_assists", "Team Assists", "", False),
+    StatDefinition("team_saves", "Team Saves", "", False),
+    StatDefinition("team_shots", "Team Shots", "", False),
+    StatDefinition("team_touches", "Team Touches", "", False),
+    StatDefinition("team_shooting_percentage", "Team Shooting %", "%", False),
+    StatDefinition("team_goals_conceded", "Team Goals Conceded", "", False),
+    StatDefinition("team_demos_inflicted", "Team Demos Inflicted", "", False),
+    StatDefinition("team_demos_taken", "Team Demos Taken", "", False),
+    StatDefinition("team_avg_boost", "Team Average Boost", "", False),
+    StatDefinition("team_time_zero_boost", "Team Time at 0 Boost", "s", False),
+    StatDefinition("team_time_full_boost", "Team Time at 100 Boost", "s", False),
+    StatDefinition("team_avg_speed", "Team Average Speed", "", False),
+    StatDefinition("team_time_boosting", "Team Time Boosting", "s", False),
+    StatDefinition("team_time_supersonic", "Team Time Supersonic", "s", False),
+    StatDefinition("team_time_powerslide", "Team Time Powerslide", "s", False),
+    StatDefinition("team_time_on_ground", "Team Time on Ground", "s", False),
+    StatDefinition("team_time_airborne", "Team Time Airborne", "s", False),
+    StatDefinition("team_airborne_percentage", "Team Airborne %", "%", False),
 )
 
 SUPPORTED_STAT_KEYS: tuple[str, ...] = tuple(
     stat.key for stat in STAT_DEFINITIONS if stat.supported
 )
 
+TEAM_STAT_KEYS: tuple[str, ...] = tuple(stat.key for stat in STAT_DEFINITIONS if stat.key.startswith("team_"))
+
+GLANCE_STAT_KEYS: tuple[str, ...] = SUPPORTED_STAT_KEYS + TEAM_STAT_KEYS
+
 STAT_LABELS: dict[str, str] = {stat.key: stat.label for stat in STAT_DEFINITIONS}
+
+
+def team_stat_suffix(team_glance_key: str) -> str:
+    """Map e.g. team_demos_inflicted -> demos_inflicted on TeamStatsSnapshot.stats."""
+    if not team_glance_key.startswith("team_"):
+        return team_glance_key
+    return team_glance_key.removeprefix("team_")

@@ -245,6 +245,8 @@ def _parse_optional_player_ref(data: Any) -> PlayerRef | None:
     if not isinstance(data, dict):
         return None
     ref = _parse_player_ref(data)
+    if (ref.primary_id or "").strip():
+        return ref
     if not ref.name and ref.shortcut in (None, 0) and ref.team_num in (None, 0):
         return None
     return ref
@@ -253,11 +255,15 @@ def _parse_optional_player_ref(data: Any) -> PlayerRef | None:
 def _parse_player_ref(data: Any) -> PlayerRef:
     if not isinstance(data, dict):
         return PlayerRef()
+    raw_pid = data.get("PrimaryId")
+    primary_id: str | None = None
+    if raw_pid is not None and str(raw_pid).strip():
+        primary_id = str(raw_pid).strip()
     return PlayerRef(
         name=str(data.get("Name", "")),
         shortcut=_optional_int(data.get("Shortcut")),
         team_num=_optional_int(data.get("TeamNum")),
-        primary_id=data.get("PrimaryId"),
+        primary_id=primary_id,
     )
 
 

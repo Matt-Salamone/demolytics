@@ -18,7 +18,13 @@ from demolytics.domain.aggregator import (
     PlayerStatsSnapshot,
 )
 from demolytics.domain.events import StatsEvent
-from demolytics.domain.stats import STAT_DEFINITIONS, STAT_LABELS, SUPPORTED_STAT_KEYS
+from demolytics.domain.stats import (
+    GLANCE_STAT_KEYS,
+    STAT_DEFINITIONS,
+    STAT_LABELS,
+    SUPPORTED_STAT_KEYS,
+    team_stat_suffix,
+)
 from demolytics.settings import AppSettings, DEFAULT_GLANCE_STATS, save_settings
 
 ctk.set_appearance_mode("dark")
@@ -31,6 +37,15 @@ GLANCE_ICONS: dict[str, str] = {
     "avg_boost": "⚡",
     "avg_speed": "🏎️",
     "airborne_percentage": "✈️",
+    "team_demos_inflicted": "💥",
+    "team_demos_taken": "🛡️",
+    "team_shooting_percentage": "🎯",
+    "team_avg_boost": "⚡",
+    "team_avg_speed": "🏎️",
+    "team_airborne_percentage": "✈️",
+    "team_time_zero_boost": "🔋",
+    "team_score": "🏁",
+    "team_goals": "⚽",
 }
 
 
@@ -49,7 +64,12 @@ class DemolyticsApp(ctk.CTk):
         self.glance_value_labels: dict[str, ctk.CTkLabel] = {}
         self.glance_session_label: ctk.CTkLabel | None = None
         self.glance_streak_label: ctk.CTkLabel | None = None
+        self.glance_goal_insight_label: ctk.CTkLabel | None = None
         self.lobby_encounters_frame: ctk.CTkScrollableFrame | None = None
+        self._lobby_encounter_cache_ids: tuple[str, ...] | None = None
+        self._lobby_encounter_cache_lines: list[str] = []
+        self._lobby_encounter_ui_signature: str | None = None
+        self._lobby_session_id_for_encounters: str | None = None
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
 
@@ -156,8 +176,9 @@ class DemolyticsApp(ctk.CTk):
 
     def _build_glance_dashboard_tab(self) -> None:
         self.glance_tab.grid_columnconfigure(0, weight=1)
-        self.glance_tab.grid_rowconfigure(1, weight=1)
-        self.glance_tab.grid_rowconfigure(2, weight=0)
+        for row in (0, 1, 3):
+            self.glance_tab.grid_rowconfigure(row, weight=0)
+        self.glance_tab.grid_rowconfigure(2, weight=1)
 
         header = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
@@ -168,13 +189,30 @@ class DemolyticsApp(ctk.CTk):
         self.glance_streak_label = ctk.CTkLabel(header, text="🔥 Win streak 0", font=streak_font)
         self.glance_streak_label.pack(side="left")
 
+        insight_wrap = ctk.CTkFrame(self.glance_tab, fg_color=("gray90", "gray25"), corner_radius=10)
+        insight_wrap.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        insight_wrap.grid_columnconfigure(0, weight=1)
+        self.glance_goal_insight_label = ctk.CTkLabel(
+            insight_wrap,
+            text=(
+                "After each goal, a standout lobby or team stat appears here "
+                "(needs ~15s of match time on the clock)."
+            ),
+            font=ctk.CTkFont(size=15),
+            wraplength=1020,
+            justify="left",
+            anchor="w",
+            text_color=("gray30", "gray80"),
+        )
+        self.glance_goal_insight_label.grid(row=0, column=0, sticky="ew", padx=14, pady=12)
+
         stats_area = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
-        stats_area.grid(row=1, column=0, sticky="nsew", padx=16, pady=8)
+        stats_area.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
         max_cols = 2
         col = row = 0
         self.glance_value_labels.clear()
         for stat_key in self.settings.glance_stats:
-            if stat_key not in SUPPORTED_STAT_KEYS:
+            if stat_key not in GLANCE_STAT_KEYS:
                 continue
             stats_area.grid_rowconfigure(row, weight=1)
             stats_area.grid_columnconfigure(col, weight=1)
@@ -201,7 +239,7 @@ class DemolyticsApp(ctk.CTk):
                 row += 1
 
         lobby_section = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
-        lobby_section.grid(row=2, column=0, sticky="ew", padx=20, pady=(8, 16))
+        lobby_section.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 16))
         lobby_section.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             lobby_section,
@@ -326,19 +364,75 @@ class DemolyticsApp(ctk.CTk):
 
         self.glance_streak_label.configure(text=f"🔥 Win streak {snapshot.win_streak}")
 
+        if self.glance_goal_insight_label is not None:
+            if snapshot.goal_insight:
+                self.glance_goal_insight_label.configure(
+                    text=snapshot.goal_insight,
+                    text_color=("gray10", "gray90"),
+                    font=ctk.CTkFont(size=15, weight="bold"),
+                )
+            else:
+                self.glance_goal_insight_label.configure(
+                    text=(
+                        "After each goal, a standout lobby or team stat appears here "
+                        "(needs ~15s of match time on the clock)."
+                    ),
+                    text_color=("gray30", "gray80"),
+                    font=ctk.CTkFont(size=15),
+                )
+
         for stat_key, label in self.glance_value_labels.items():
-            label.configure(text=_format_stat(stat_key, snapshot.live_user_stats.get(stat_key)))
+            raw = _glance_stat_raw(snapshot, stat_key)
+            label.configure(text=_format_stat(stat_key, raw))
 
         self._refresh_lobby_encounters(snapshot)
 
     def _refresh_lobby_encounters(self, snapshot: DashboardSnapshot) -> None:
         if self.lobby_encounters_frame is None:
             return
+
+        current_sid = snapshot.session.session_id if snapshot.session else None
+        if current_sid != self._lobby_session_id_for_encounters:
+            self._lobby_session_id_for_encounters = current_sid
+            self._lobby_encounter_cache_ids = None
+            self._lobby_encounter_cache_lines = []
+            self._lobby_encounter_ui_signature = None
+
+        others = [p for p in snapshot.live_players if not p.is_user and p.primary_id]
+        if others:
+            ids = tuple(sorted(p.primary_id for p in others))
+            db_rows = self.repository.get_encounters_for_primary_ids(ids)
+            lines: list[str] = []
+            for player in sorted(others, key=lambda p: (p.player_name or "").lower()):
+                row = db_rows.get(player.primary_id)
+                teammate = int(row["teammate_games"]) if row is not None else 0
+                opponent = int(row["opponent_games"]) if row is not None else 0
+                total = teammate + opponent
+                name = (player.player_name or "").strip() or player.primary_id
+                if total == 0:
+                    lines.append(f"{name}  —  no prior matches recorded")
+                else:
+                    lines.append(
+                        f"{name}  —  {total} prior games (teammate {teammate}, opponent {opponent})"
+                    )
+            self._lobby_encounter_cache_ids = ids
+            self._lobby_encounter_cache_lines = list(lines)
+            signature = f"live:{','.join(ids)}"
+        elif self._lobby_encounter_cache_lines and self._lobby_encounter_cache_ids is not None:
+            lines = list(self._lobby_encounter_cache_lines)
+            signature = f"cache:{','.join(self._lobby_encounter_cache_ids)}"
+        else:
+            lines = []
+            signature = "placeholder"
+
+        if signature == self._lobby_encounter_ui_signature:
+            return
+
+        self._lobby_encounter_ui_signature = signature
         for child in self.lobby_encounters_frame.winfo_children():
             child.destroy()
 
-        others = [p for p in snapshot.live_players if not p.is_user and p.primary_id]
-        if not others:
+        if not lines:
             ctk.CTkLabel(
                 self.lobby_encounters_frame,
                 text="Join a match to see how often you have played with each lobby player.",
@@ -350,18 +444,7 @@ class DemolyticsApp(ctk.CTk):
             ).pack(anchor="w", padx=8, pady=6)
             return
 
-        ids = tuple(p.primary_id for p in others)
-        db_rows = self.repository.get_encounters_for_primary_ids(ids)
-        for player in sorted(others, key=lambda p: (p.player_name or "").lower()):
-            row = db_rows.get(player.primary_id)
-            teammate = int(row["teammate_games"]) if row is not None else 0
-            opponent = int(row["opponent_games"]) if row is not None else 0
-            total = teammate + opponent
-            name = (player.player_name or "").strip() or player.primary_id
-            if total == 0:
-                line = f"{name}  —  no prior matches recorded"
-            else:
-                line = f"{name}  —  {total} prior games (teammate {teammate}, opponent {opponent})"
+        for line in lines:
             ctk.CTkLabel(
                 self.lobby_encounters_frame,
                 text=line,
@@ -383,7 +466,22 @@ class DemolyticsApp(ctk.CTk):
             session_id = None
 
         for stat_key, label in self.stat_value_labels.items():
-            label.configure(text=_format_stat(stat_key, snapshot.live_user_stats.get(stat_key)))
+            if stat_key.startswith("team_"):
+                inner = team_stat_suffix(stat_key)
+                user_val = snapshot.user_team_stats.get(inner)
+                lines = [_format_stat(stat_key, user_val)]
+                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
+                    team_label = team.team_name or f"Team {team.team_num}"
+                    tv = team.stats.get(inner)
+                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
+            else:
+                user_val = snapshot.live_user_stats.get(stat_key)
+                lines = [_format_stat(stat_key, user_val)]
+                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
+                    team_label = team.team_name or f"Team {team.team_num}"
+                    tv = team.stats.get(stat_key)
+                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
+            label.configure(text="\n".join(lines), justify="right")
 
         session_averages = self.repository.get_user_averages(game_mode=game_mode, session_id=session_id)
         all_time_averages = self.repository.get_user_averages(game_mode=game_mode)
@@ -485,7 +583,7 @@ class DemolyticsApp(ctk.CTk):
         )
         glance_vars: dict[str, BooleanVar] = {}
         for stat in STAT_DEFINITIONS:
-            if not stat.supported:
+            if stat.key not in GLANCE_STAT_KEYS:
                 continue
             variable = BooleanVar(value=stat.key in self.settings.glance_stats)
             checkbox = ctk.CTkCheckBox(outer, text=stat.label, variable=variable)
@@ -510,7 +608,7 @@ class DemolyticsApp(ctk.CTk):
 
         def save() -> None:
             self.settings.glance_stats = [
-                key for key, variable in glance_vars.items() if variable.get() and key in SUPPORTED_STAT_KEYS
+                key for key, variable in glance_vars.items() if variable.get() and key in GLANCE_STAT_KEYS
             ]
             if not self.settings.glance_stats:
                 self.settings.glance_stats = list(DEFAULT_GLANCE_STATS)
@@ -556,6 +654,10 @@ class DemolyticsApp(ctk.CTk):
             self.repository.clear_all_data()
             self.aggregator.reset_tracking_state()
             self.snapshot = self.aggregator.snapshot()
+            self._lobby_encounter_cache_ids = None
+            self._lobby_encounter_cache_lines = []
+            self._lobby_encounter_ui_signature = None
+            self._lobby_session_id_for_encounters = None
             confirm.destroy()
             self._refresh_all_views()
             messagebox.showinfo("Demolytics", "All statistics were reset.")
@@ -575,7 +677,9 @@ class DemolyticsApp(ctk.CTk):
         self.glance_value_labels.clear()
         self.glance_session_label = None
         self.glance_streak_label = None
+        self.glance_goal_insight_label = None
         self.lobby_encounters_frame = None
+        self._lobby_encounter_ui_signature = None
         self._build_glance_dashboard_tab()
         self._refresh_glance_dashboard(self.snapshot)
 
@@ -605,14 +709,21 @@ def _format_comparison(stat_key: str, left: float | None, right: float | None) -
     return f"{_format_stat(stat_key, left)} / {_format_stat(stat_key, right)}"
 
 
+def _glance_stat_raw(snapshot: DashboardSnapshot, stat_key: str) -> float | None:
+    if stat_key.startswith("team_"):
+        return snapshot.user_team_stats.get(team_stat_suffix(stat_key))
+    return snapshot.live_user_stats.get(stat_key)
+
+
 def _format_stat(stat_key: str, value: float | None) -> str:
     if value is None:
         return "--"
-    if stat_key.startswith("time_"):
+    base = team_stat_suffix(stat_key) if stat_key.startswith("team_") else stat_key
+    if base.startswith("time_"):
         return f"{value:.1f}s"
-    if "percentage" in stat_key:
+    if "percentage" in base:
         return f"{value:.1f}%"
-    if stat_key.startswith("avg_"):
+    if base.startswith("avg_"):
         return f"{value:.1f}"
     return f"{value:.0f}"
 
