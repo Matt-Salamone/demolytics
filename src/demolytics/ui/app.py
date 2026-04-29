@@ -46,6 +46,13 @@ ctk.set_default_color_theme("blue")
 
 LOGGER = logging.getLogger(__name__)
 
+# Brief pause so RL can finish writing the replay before we look in Demos.
+_BALLCHASING_POST_MATCH_DELAY_S = 4.0
+
+_BALLCHASING_NO_REPLAY_SNACKBAR = (
+    "Could not find a replay for Ballchasing. Make sure your replays are being saved so matches write .replay files to your Demos folder."
+)
+
 
 def _normalize_playlist_mode(mode: str) -> str:
     if mode in STANDARD_PLAYLIST_MODES:
@@ -574,7 +581,6 @@ class DemolyticsApp(ctk.CTk):
         self._ensure_ballchasing_worker()
         self._ballchasing_queue.put(
             {
-                "delay_seconds": 4.0,
                 "replay_data": dict(replay_data) if replay_data else None,
                 "match_end": match_end,
                 "token": token,
@@ -589,19 +595,16 @@ class DemolyticsApp(ctk.CTk):
         while True:
             job = self._ballchasing_queue.get()
             try:
-                time.sleep(float(job["delay_seconds"]))
+                time.sleep(_BALLCHASING_POST_MATCH_DELAY_S)
                 replay_path = resolve_replay_path(
                     job.get("replay_data"),
                     job["match_end"],
                 )
                 if replay_path is None:
-                    LOGGER.debug("Ballchasing: could not resolve a replay file for upload.")
+                    LOGGER.debug("Ballchasing: no replay file found for upload.")
                     self.after(
                         0,
-                        lambda: self._show_snackbar(
-                            "Could not find a replay file to upload to Ballchasing.",
-                            success=False,
-                        ),
+                        lambda msg=_BALLCHASING_NO_REPLAY_SNACKBAR: self._show_snackbar(msg, success=False),
                     )
                     continue
                 upload_replay_file(replay_path, job["token"], job["visibility"])

@@ -6,7 +6,7 @@ from typing import Any
 
 
 def default_replays_folder() -> Path:
-    """Rocket League default auto-replay directory (Windows layout)."""
+    """Rocket League default replay folder (Windows layout)."""
     return Path.home() / "Documents" / "My Games" / "Rocket League" / "TAGame" / "Demos"
 
 
@@ -16,49 +16,39 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _candidate_paths_from_data(data: dict[str, Any], demos_dir: Path) -> list[Path]:
-    """Collect possible replay paths from Stats API ReplayCreated-style payloads."""
-    out: list[Path] = []
-    for key in ("ReplayFile", "FilePath", "ReplayPath", "FullReplayPath", "Path"):
-        v = data.get(key)
-        if isinstance(v, str) and v.strip():
-            out.append(Path(v.strip()))
-    for key in ("ReplayName", "ReplayFilename", "Name"):
-        v = data.get(key)
-        if not isinstance(v, str) or not v.strip():
-            continue
-        name = v.strip()
-        p = Path(name)
-        if p.suffix.lower() == ".replay" and (p.is_absolute() or "/" in name or "\\" in name):
-            out.append(p)
-        else:
-            stem = name[:-7] if name.lower().endswith(".replay") else name
-            out.append(demos_dir / f"{stem}.replay")
-    for v in data.values():
-        if isinstance(v, str) and v.lower().endswith(".replay"):
-            out.append(Path(v.strip()))
-    return out
-
-
 def path_from_replay_created_data(
     data: dict[str, Any],
     *,
     demos_dir: Path | None = None,
 ) -> Path | None:
+    """If the Stats API names a replay file, return it when it exists."""
     demos = demos_dir or default_replays_folder()
-    for candidate in _candidate_paths_from_data(data, demos):
-        try:
-            if candidate.is_file() and candidate.suffix.lower() == ".replay":
-                return candidate.resolve()
-        except OSError:
+    for key in ("ReplayFile", "FilePath", "ReplayName"):
+        v = data.get(key)
+        if not isinstance(v, str) or not v.strip():
             continue
-        if not candidate.is_absolute():
+        s = v.strip()
+        p = Path(s)
+        if p.suffix.lower() == ".replay":
             try:
-                alt = demos / candidate.name
-                if alt.is_file():
-                    return alt.resolve()
+                if p.is_file():
+                    return p.resolve()
             except OSError:
-                continue
+                pass
+            if not p.is_absolute():
+                try:
+                    q = demos / p.name
+                    if q.is_file():
+                        return q.resolve()
+                except OSError:
+                    pass
+        else:
+            try:
+                q = demos / f"{s}.replay"
+                if q.is_file():
+                    return q.resolve()
+            except OSError:
+                pass
     return None
 
 
@@ -69,8 +59,8 @@ def resolve_replay_path(
     demos_dir: Path | None = None,
 ) -> Path | None:
     """
-    Resolve a .replay file: prefer ReplayCreated payload, else newest file in Demos
-    whose mtime is within a short window of match end.
+    Prefer a path from ReplayCreated data; otherwise the newest .replay in Demos
+    with mtime within a short window of match end.
     """
     demos = demos_dir or default_replays_folder()
     if replay_created_data:
