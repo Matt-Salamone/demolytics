@@ -84,6 +84,21 @@ class DemolyticsRepository:
                     ON player_match_stats(match_guid, is_user);
                 """
             )
+            self._migrate_player_match_stat_columns(connection)
+
+    def _migrate_player_match_stat_columns(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute("PRAGMA table_info(player_match_stats)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        for key in SUPPORTED_STAT_KEYS:
+            if key in existing:
+                continue
+            connection.execute(f"ALTER TABLE player_match_stats ADD COLUMN {key} REAL DEFAULT 0")
+
+    def clear_all_data(self) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM player_match_stats")
+            connection.execute("DELETE FROM matches")
+            connection.execute("DELETE FROM sessions")
 
     def upsert_session(self, session: SessionSnapshot) -> None:
         with self.connect() as connection:
@@ -216,6 +231,32 @@ class DemolyticsRepository:
                     (limit,),
                 )
             )
+
+    def get_encounters_for_primary_ids(self, primary_ids: Iterable[str]) -> dict[str, sqlite3.Row]:
+        """Encounter counts (teammate / opponent vs saved user) for the given platform IDs."""
+        ids = tuple({pid for pid in primary_ids if pid})
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    p.primary_id,
+                    MAX(p.player_name) AS player_name,
+                    SUM(CASE WHEN p.team_num = u.team_num THEN 1 ELSE 0 END) AS teammate_games,
+                    SUM(CASE WHEN p.team_num != u.team_num THEN 1 ELSE 0 END) AS opponent_games,
+                    COUNT(*) AS total_games
+                FROM player_match_stats p
+                JOIN player_match_stats u
+                    ON u.match_guid = p.match_guid
+                    AND u.is_user = 1
+                WHERE p.is_user = 0 AND p.primary_id IN ({placeholders})
+                GROUP BY p.primary_id
+                """,
+                ids,
+            ).fetchall()
+        return {str(row["primary_id"]): row for row in rows}
 
     def set_setting(self, key: str, value: str) -> None:
         with self.connect() as connection:

@@ -119,12 +119,25 @@ LIFECYCLE_EVENTS = {
 }
 
 
+def _event_payload_as_dict(raw_data: Any) -> dict[str, Any]:
+    """Rocket League sends `Data` as either an object or a JSON-encoded string."""
+    if raw_data is None:
+        return {}
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, str):
+        try:
+            inner = json.loads(raw_data)
+        except json.JSONDecodeError:
+            return {}
+        return inner if isinstance(inner, dict) else {}
+    return {}
+
+
 def parse_message(raw: str | bytes | dict[str, Any]) -> StatsEvent:
     envelope = _load_envelope(raw)
     event_name = str(envelope.get("Event", ""))
-    data = envelope.get("Data") or {}
-    if not isinstance(data, dict):
-        data = {}
+    data = _event_payload_as_dict(envelope.get("Data"))
 
     if event_name == "UpdateState":
         return _parse_update_state(data)
@@ -175,6 +188,9 @@ def _parse_update_state(data: dict[str, Any]) -> UpdateStateEvent:
 
 
 def _parse_player_state(data: dict[str, Any]) -> PlayerState:
+    on_ground = _optional_bool(data.get("bOnGround"))
+    if on_ground is None:
+        on_ground = _optional_bool(data.get("bHasWheelContact"))
     return PlayerState(
         name=str(data.get("Name", "")),
         primary_id=str(data.get("PrimaryId", "")),
@@ -192,7 +208,7 @@ def _parse_player_state(data: dict[str, Any]) -> PlayerState:
         speed=_optional_float(data.get("Speed")),
         boost=_optional_int(data.get("Boost")),
         boosting=_optional_bool(data.get("bBoosting")),
-        on_ground=_optional_bool(data.get("bOnGround")),
+        on_ground=on_ground,
         on_wall=_optional_bool(data.get("bOnWall")),
         powersliding=_optional_bool(data.get("bPowersliding")),
         demolished=_optional_bool(data.get("bDemolished")),

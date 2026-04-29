@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from queue import Queue
-from tkinter import BooleanVar
+from tkinter import BooleanVar, messagebox
 from typing import Any
 
 import customtkinter as ctk
@@ -19,10 +19,19 @@ from demolytics.domain.aggregator import (
 )
 from demolytics.domain.events import StatsEvent
 from demolytics.domain.stats import STAT_DEFINITIONS, STAT_LABELS, SUPPORTED_STAT_KEYS
-from demolytics.settings import AppSettings, save_settings
+from demolytics.settings import AppSettings, DEFAULT_GLANCE_STATS, save_settings
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+GLANCE_ICONS: dict[str, str] = {
+    "shooting_percentage": "🎯",
+    "demos_inflicted": "💥",
+    "demos_taken": "🛡️",
+    "avg_boost": "⚡",
+    "avg_speed": "🏎️",
+    "airborne_percentage": "✈️",
+}
 
 
 class DemolyticsApp(ctk.CTk):
@@ -37,6 +46,10 @@ class DemolyticsApp(ctk.CTk):
         self.stat_value_labels: dict[str, ctk.CTkLabel] = {}
         self.session_average_labels: dict[str, ctk.CTkLabel] = {}
         self.global_average_labels: dict[str, ctk.CTkLabel] = {}
+        self.glance_value_labels: dict[str, ctk.CTkLabel] = {}
+        self.glance_session_label: ctk.CTkLabel | None = None
+        self.glance_streak_label: ctk.CTkLabel | None = None
+        self.lobby_encounters_frame: ctk.CTkScrollableFrame | None = None
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
 
@@ -130,22 +143,83 @@ class DemolyticsApp(ctk.CTk):
 
         self.tab_view = ctk.CTkTabview(self)
         self.tab_view.grid(row=1, column=0, sticky="nsew", padx=16, pady=16)
-        self.dashboard_tab = self.tab_view.add("Dashboard")
+        self.glance_tab = self.tab_view.add("Dashboard")
+        self.stats_tab = self.tab_view.add("Stats")
         self.history_tab = self.tab_view.add("Match History")
         self.encounters_tab = self.tab_view.add("Encounters")
 
-        self._build_dashboard_tab()
+        self._build_glance_dashboard_tab()
+        self._build_stats_tab()
         self._build_history_tab()
         self._build_encounters_tab()
         self._refresh_all_views()
 
-    def _build_dashboard_tab(self) -> None:
-        self.dashboard_tab.grid_columnconfigure((0, 1, 2), weight=1, uniform="dashboard")
-        self.dashboard_tab.grid_rowconfigure(0, weight=1)
+    def _build_glance_dashboard_tab(self) -> None:
+        self.glance_tab.grid_columnconfigure(0, weight=1)
+        self.glance_tab.grid_rowconfigure(1, weight=1)
+        self.glance_tab.grid_rowconfigure(2, weight=0)
 
-        live_frame = self._dashboard_column("Live Match", 0)
-        session_frame = self._dashboard_column("Session vs All-Time", 1)
-        global_frame = self._dashboard_column("You vs Encountered Average", 2)
+        header = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+        big_font = ctk.CTkFont(size=28, weight="bold")
+        self.glance_session_label = ctk.CTkLabel(header, text="Session 0 - 0", font=big_font)
+        self.glance_session_label.pack(side="left", padx=(0, 28))
+        streak_font = ctk.CTkFont(size=22, weight="bold")
+        self.glance_streak_label = ctk.CTkLabel(header, text="🔥 Win streak 0", font=streak_font)
+        self.glance_streak_label.pack(side="left")
+
+        stats_area = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        stats_area.grid(row=1, column=0, sticky="nsew", padx=16, pady=8)
+        max_cols = 2
+        col = row = 0
+        self.glance_value_labels.clear()
+        for stat_key in self.settings.glance_stats:
+            if stat_key not in SUPPORTED_STAT_KEYS:
+                continue
+            stats_area.grid_rowconfigure(row, weight=1)
+            stats_area.grid_columnconfigure(col, weight=1)
+            cell = ctk.CTkFrame(stats_area, fg_color=("gray85", "gray20"), corner_radius=12)
+            cell.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+            icon = GLANCE_ICONS.get(stat_key, "📊")
+            ctk.CTkLabel(
+                cell,
+                text=f"{icon}  {STAT_LABELS[stat_key]}",
+                font=ctk.CTkFont(size=15),
+                anchor="w",
+            ).pack(anchor="w", padx=14, pady=(12, 4))
+            value_label = ctk.CTkLabel(
+                cell,
+                text="--",
+                font=ctk.CTkFont(size=26, weight="bold"),
+                anchor="w",
+            )
+            value_label.pack(anchor="w", padx=14, pady=(0, 14))
+            self.glance_value_labels[stat_key] = value_label
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+
+        lobby_section = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        lobby_section.grid(row=2, column=0, sticky="ew", padx=20, pady=(8, 16))
+        lobby_section.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            lobby_section,
+            text="👥 This lobby — prior games with you",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.lobby_encounters_frame = ctk.CTkScrollableFrame(lobby_section, height=160)
+        self.lobby_encounters_frame.grid(row=1, column=0, sticky="nsew")
+        lobby_section.grid_rowconfigure(1, weight=1)
+
+    def _build_stats_tab(self) -> None:
+        self.stats_tab.grid_columnconfigure((0, 1, 2), weight=1, uniform="stats_tab")
+        self.stats_tab.grid_rowconfigure(0, weight=1)
+
+        live_frame = self._stats_column("Live Match", 0)
+        session_frame = self._stats_column("Session vs All-Time", 1)
+        global_frame = self._stats_column("You vs Encountered Average", 2)
 
         for stat_key in self.settings.visible_stats:
             if stat_key not in SUPPORTED_STAT_KEYS:
@@ -162,8 +236,8 @@ class DemolyticsApp(ctk.CTk):
                 "-- / --",
             )
 
-    def _dashboard_column(self, title: str, column: int) -> ctk.CTkScrollableFrame:
-        frame = ctk.CTkScrollableFrame(self.dashboard_tab, label_text=title)
+    def _stats_column(self, title: str, column: int) -> ctk.CTkScrollableFrame:
+        frame = ctk.CTkScrollableFrame(self.stats_tab, label_text=title)
         frame.grid(row=0, column=column, sticky="nsew", padx=8, pady=8)
         frame.grid_columnconfigure(1, weight=1)
         return frame
@@ -225,15 +299,78 @@ class DemolyticsApp(ctk.CTk):
             changed = True
 
         if changed:
-            self._refresh_dashboard(self.snapshot)
+            self._refresh_stats_tab(self.snapshot)
+            self._refresh_glance_dashboard(self.snapshot)
         self.after(250, self._poll_queues)
 
     def _refresh_all_views(self) -> None:
-        self._refresh_dashboard(self.snapshot)
+        self._refresh_stats_tab(self.snapshot)
+        self._refresh_glance_dashboard(self.snapshot)
         self._refresh_history()
         self._refresh_encounters()
 
-    def _refresh_dashboard(self, snapshot: DashboardSnapshot) -> None:
+    def _refresh_glance_dashboard(self, snapshot: DashboardSnapshot) -> None:
+        if self.glance_session_label is None or self.glance_streak_label is None:
+            return
+        if snapshot.session:
+            wins, losses = snapshot.session.wins, snapshot.session.losses
+            self.glance_session_label.configure(text=f"Session {wins} - {losses}")
+            if wins > losses:
+                self.glance_session_label.configure(text_color="#3dd68c")
+            elif losses > wins:
+                self.glance_session_label.configure(text_color="#ff6b6b")
+            else:
+                self.glance_session_label.configure(text_color=("gray10", "gray90"))
+        else:
+            self.glance_session_label.configure(text="Session 0 - 0", text_color=("gray10", "gray90"))
+
+        self.glance_streak_label.configure(text=f"🔥 Win streak {snapshot.win_streak}")
+
+        for stat_key, label in self.glance_value_labels.items():
+            label.configure(text=_format_stat(stat_key, snapshot.live_user_stats.get(stat_key)))
+
+        self._refresh_lobby_encounters(snapshot)
+
+    def _refresh_lobby_encounters(self, snapshot: DashboardSnapshot) -> None:
+        if self.lobby_encounters_frame is None:
+            return
+        for child in self.lobby_encounters_frame.winfo_children():
+            child.destroy()
+
+        others = [p for p in snapshot.live_players if not p.is_user and p.primary_id]
+        if not others:
+            ctk.CTkLabel(
+                self.lobby_encounters_frame,
+                text="Join a match to see how often you have played with each lobby player.",
+                font=ctk.CTkFont(size=14),
+                text_color="gray",
+                wraplength=900,
+                justify="left",
+                anchor="w",
+            ).pack(anchor="w", padx=8, pady=6)
+            return
+
+        ids = tuple(p.primary_id for p in others)
+        db_rows = self.repository.get_encounters_for_primary_ids(ids)
+        for player in sorted(others, key=lambda p: (p.player_name or "").lower()):
+            row = db_rows.get(player.primary_id)
+            teammate = int(row["teammate_games"]) if row is not None else 0
+            opponent = int(row["opponent_games"]) if row is not None else 0
+            total = teammate + opponent
+            name = (player.player_name or "").strip() or player.primary_id
+            if total == 0:
+                line = f"{name}  —  no prior matches recorded"
+            else:
+                line = f"{name}  —  {total} prior games (teammate {teammate}, opponent {opponent})"
+            ctk.CTkLabel(
+                self.lobby_encounters_frame,
+                text=line,
+                font=ctk.CTkFont(size=15),
+                anchor="w",
+                justify="left",
+            ).pack(anchor="w", padx=8, pady=4)
+
+    def _refresh_stats_tab(self, snapshot: DashboardSnapshot) -> None:
         if snapshot.session:
             self.record_label.configure(text=f"Session: {snapshot.session.wins} - {snapshot.session.losses}")
             self.mode_label.configure(text=f"Mode: {snapshot.session.game_mode}")
@@ -335,42 +472,121 @@ class DemolyticsApp(ctk.CTk):
 
     def _open_settings(self) -> None:
         modal = ctk.CTkToplevel(self)
-        modal.title("Visible Stats")
-        modal.geometry("420x620")
+        modal.title("Settings")
+        modal.geometry("480x720")
         modal.grab_set()
 
-        frame = ctk.CTkScrollableFrame(modal, label_text="Dashboard Stats")
-        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        outer = ctk.CTkScrollableFrame(modal)
+        outer.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(outer, text="Glance dashboard (during game)", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w",
+            pady=(0, 6),
+        )
+        glance_vars: dict[str, BooleanVar] = {}
+        for stat in STAT_DEFINITIONS:
+            if not stat.supported:
+                continue
+            variable = BooleanVar(value=stat.key in self.settings.glance_stats)
+            checkbox = ctk.CTkCheckBox(outer, text=stat.label, variable=variable)
+            checkbox.pack(anchor="w", padx=8, pady=3)
+            glance_vars[stat.key] = variable
+
+        ctk.CTkLabel(outer, text="Stats tab columns", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w",
+            pady=(16, 6),
+        )
         variables: dict[str, BooleanVar] = {}
         for stat in STAT_DEFINITIONS:
             variable = BooleanVar(value=stat.key in self.settings.visible_stats)
             checkbox = ctk.CTkCheckBox(
-                frame,
+                outer,
                 text=stat.label if stat.supported else f"{stat.label} (future)",
                 variable=variable,
                 state="normal" if stat.supported else "disabled",
             )
-            checkbox.pack(anchor="w", padx=8, pady=4)
+            checkbox.pack(anchor="w", padx=8, pady=3)
             variables[stat.key] = variable
 
         def save() -> None:
+            self.settings.glance_stats = [
+                key for key, variable in glance_vars.items() if variable.get() and key in SUPPORTED_STAT_KEYS
+            ]
+            if not self.settings.glance_stats:
+                self.settings.glance_stats = list(DEFAULT_GLANCE_STATS)
             self.settings.visible_stats = [
                 key for key, variable in variables.items() if variable.get() and key in SUPPORTED_STAT_KEYS
             ]
             save_settings(self.settings)
             modal.destroy()
-            self._rebuild_dashboard_columns()
+            self._rebuild_glance_tab()
+            self._rebuild_stats_tab()
 
-        ctk.CTkButton(modal, text="Save", command=save).pack(pady=(0, 16))
+        btn_row = ctk.CTkFrame(modal, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkButton(btn_row, text="Save", command=save).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            btn_row,
+            text="Reset all statistics…",
+            fg_color="#8b3a3a",
+            command=lambda: (modal.destroy(), self._confirm_reset_database()),
+        ).pack(
+            side="left",
+        )
 
-    def _rebuild_dashboard_columns(self) -> None:
-        for child in self.dashboard_tab.winfo_children():
+    def _confirm_reset_database(self) -> None:
+        confirm = ctk.CTkToplevel(self)
+        confirm.title("Reset statistics")
+        confirm.geometry("440x220")
+        confirm.grab_set()
+        ctk.CTkLabel(
+            confirm,
+            text=(
+                "This permanently deletes all saved matches, player stats, sessions, "
+                "and encounter history from the local database. This cannot be undone."
+            ),
+            wraplength=400,
+            justify="left",
+        ).pack(padx=20, pady=20)
+
+        actions = ctk.CTkFrame(confirm, fg_color="transparent")
+        actions.pack(pady=(0, 16))
+
+        def do_reset() -> None:
+            self.repository.clear_all_data()
+            self.aggregator.reset_tracking_state()
+            self.snapshot = self.aggregator.snapshot()
+            confirm.destroy()
+            self._refresh_all_views()
+            messagebox.showinfo("Demolytics", "All statistics were reset.")
+
+        ctk.CTkButton(actions, text="Cancel", width=100, command=confirm.destroy).pack(side="left", padx=8)
+        ctk.CTkButton(
+            actions,
+            text="Delete everything",
+            width=140,
+            fg_color="#8b3a3a",
+            command=do_reset,
+        ).pack(side="left", padx=8)
+
+    def _rebuild_glance_tab(self) -> None:
+        for child in self.glance_tab.winfo_children():
+            child.destroy()
+        self.glance_value_labels.clear()
+        self.glance_session_label = None
+        self.glance_streak_label = None
+        self.lobby_encounters_frame = None
+        self._build_glance_dashboard_tab()
+        self._refresh_glance_dashboard(self.snapshot)
+
+    def _rebuild_stats_tab(self) -> None:
+        for child in self.stats_tab.winfo_children():
             child.destroy()
         self.stat_value_labels.clear()
         self.session_average_labels.clear()
         self.global_average_labels.clear()
-        self._build_dashboard_tab()
-        self._refresh_dashboard(self.snapshot)
+        self._build_stats_tab()
+        self._refresh_stats_tab(self.snapshot)
 
     def _clear_root(self) -> None:
         if self.api_thread is not None:

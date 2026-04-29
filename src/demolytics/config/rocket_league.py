@@ -10,6 +10,9 @@ from typing import Iterable
 
 DEFAULT_STATS_API_PORT = 49123
 DEFAULT_STATS_API_RELATIVE_PATH = Path("TAGame") / "Config" / "DefaultStatsAPI.ini"
+DOCUMENTS_RL_TAGAME_CONFIG = (
+    Path.home() / "Documents" / "My Games" / "Rocket League" / "TAGame" / "Config"
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,40 @@ class StatsApiStatus:
         return not self.enabled
 
 
-def check_stats_api_status(install_dir: Path | str | None = None) -> StatsApiStatus:
+def _stats_api_ini_layer_paths(
+    install_dir: Path,
+    *,
+    documents_config_dir: Path | None,
+) -> list[Path]:
+    """UE-style layering: install defaults, then per-user Documents overrides."""
+    doc = documents_config_dir if documents_config_dir is not None else DOCUMENTS_RL_TAGAME_CONFIG
+    return [
+        install_dir / DEFAULT_STATS_API_RELATIVE_PATH,
+        doc / "DefaultStatsAPI.ini",
+        doc / "StatsAPI.ini",
+    ]
+
+
+def _merge_stats_api_ini_layers(paths: Iterable[Path]) -> tuple[StatsApiIni, list[Path]]:
+    values: dict[str, str] = {}
+    used: list[Path] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        used.append(path)
+        values.update(_parse_ini_values(path.read_text(encoding="utf-8-sig")))
+    if not used:
+        return StatsApiIni(), []
+    packet_send_rate = _parse_float(values.get("PacketSendRate"), default=0.0)
+    port = _parse_int(values.get("Port"), default=DEFAULT_STATS_API_PORT)
+    return StatsApiIni(packet_send_rate=packet_send_rate, port=port), used
+
+
+def check_stats_api_status(
+    install_dir: Path | str | None = None,
+    *,
+    documents_config_dir: Path | None = None,
+) -> StatsApiStatus:
     resolved_install_dir = Path(install_dir) if install_dir else find_install_dir()
     if resolved_install_dir is None:
         return StatsApiStatus(
@@ -48,26 +84,36 @@ def check_stats_api_status(install_dir: Path | str | None = None) -> StatsApiSta
             reason="Rocket League install directory could not be detected.",
         )
 
-    ini_path = resolved_install_dir / DEFAULT_STATS_API_RELATIVE_PATH
-    if not ini_path.exists():
+    layers = _stats_api_ini_layer_paths(
+        resolved_install_dir,
+        documents_config_dir=documents_config_dir,
+    )
+    config, used_paths = _merge_stats_api_ini_layers(layers)
+    expected_install_ini = resolved_install_dir / DEFAULT_STATS_API_RELATIVE_PATH
+
+    if not used_paths:
         return StatsApiStatus(
             install_dir=resolved_install_dir,
-            ini_path=ini_path,
+            ini_path=expected_install_ini,
             packet_send_rate=0,
             port=DEFAULT_STATS_API_PORT,
             enabled=False,
-            reason="DefaultStatsAPI.ini was not found.",
+            reason="DefaultStatsAPI.ini was not found (install or Documents).",
         )
 
-    config = parse_stats_api_ini(ini_path)
+    primary_ini = used_paths[-1]
     if not config.enabled:
-        reason = "PacketSendRate is 0 or missing, so the local Stats API is disabled."
+        reason = (
+            "PacketSendRate is 0 or missing after merging install and "
+            r"Documents\My Games\Rocket League\TAGame\Config overrides, "
+            "so the local Stats API is disabled."
+        )
     else:
         reason = "Rocket League Stats API is enabled."
 
     return StatsApiStatus(
         install_dir=resolved_install_dir,
-        ini_path=ini_path,
+        ini_path=primary_ini,
         packet_send_rate=config.packet_send_rate,
         port=config.port,
         enabled=config.enabled,
@@ -91,8 +137,9 @@ def find_install_dir(extra_candidates: Iterable[Path] = ()) -> Path | None:
 
 def setup_instructions(status: StatsApiStatus) -> list[str]:
     ini_path = status.ini_path or Path("<Rocket League>") / DEFAULT_STATS_API_RELATIVE_PATH
+    doc_hint = Path.home() / "Documents" / "My Games" / "Rocket League" / "TAGame" / "Config"
     return [
-        f"Open {ini_path}.",
+        f"Open {ini_path} (or an override in {doc_hint}).",
         "Set PacketSendRate to a value greater than 0, such as PacketSendRate=20.",
         f"Optional: set Port={status.port or DEFAULT_STATS_API_PORT}.",
         "Save the file and restart Rocket League before reconnecting Demolytics.",

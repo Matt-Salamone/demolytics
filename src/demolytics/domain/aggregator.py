@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from demolytics.domain.events import (
+    GameState,
     MatchEndedEvent,
     MatchLifecycleEvent,
     PlayerRef,
@@ -25,6 +26,7 @@ class SessionSnapshot:
     start_time: datetime
     wins: int = 0
     losses: int = 0
+    win_streak: int = 0
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class DashboardSnapshot:
     live_players: tuple[PlayerStatsSnapshot, ...]
     user_primary_id: str | None
     status: str
+    win_streak: int = 0
 
 
 @dataclass(frozen=True)
@@ -96,7 +99,13 @@ class PlayerAccumulator:
     time_on_ground: float = 0.0
     time_airborne: float = 0.0
 
-    def apply_update(self, player: PlayerState, delta_seconds: float) -> None:
+    def apply_update(
+        self,
+        player: PlayerState,
+        delta_seconds: float,
+        *,
+        treat_none_on_ground_as_air: bool = False,
+    ) -> None:
         self.player_name = player.name or self.player_name
         self.team_num = player.team_num
         self.shortcut = player.shortcut
@@ -130,10 +139,15 @@ class PlayerAccumulator:
             self.time_supersonic += delta_seconds
         if player.powersliding:
             self.time_powerslide += delta_seconds
-        if player.on_ground is True:
-            self.time_on_ground += delta_seconds
-        elif player.on_ground is False:
-            self.time_airborne += delta_seconds
+
+        has_car = player.has_car is not False
+        if has_car:
+            if player.on_ground is True:
+                self.time_on_ground += delta_seconds
+            elif player.on_ground is False or (
+                treat_none_on_ground_as_air and player.on_ground is None
+            ):
+                self.time_airborne += delta_seconds
 
         demolished = bool(player.demolished)
         if demolished and not self.last_demolished:
@@ -173,6 +187,7 @@ class PlayerAccumulator:
             "time_powerslide": self.time_powerslide,
             "time_on_ground": self.time_on_ground,
             "time_airborne": self.time_airborne,
+            "airborne_percentage": _airborne_percentage(self.time_airborne, self.time_on_ground),
         }
         return PlayerStatsSnapshot(
             match_guid=self.match_guid,
@@ -195,13 +210,26 @@ class MatchAccumulator:
     last_wall_time: datetime | None = None
     players: dict[str, PlayerAccumulator] = field(default_factory=dict)
     teams: dict[int, TeamState] = field(default_factory=dict)
+    multiplayer_seen: bool = False
 
-    def apply_update(self, event: UpdateStateEvent, now: datetime) -> None:
+    def apply_update(
+        self,
+        event: UpdateStateEvent,
+        now: datetime,
+        *,
+        track_stats: bool,
+        treat_none_on_ground_as_air: bool,
+    ) -> None:
         self.match_guid = event.match_guid or self.match_guid
         self.game_mode = infer_game_mode(event.players)
         self.teams = {team.team_num: team for team in event.game.teams}
+        distinct_ids = {player.primary_id for player in event.players if player.primary_id}
+        if len(distinct_ids) >= 2:
+            self.multiplayer_seen = True
+
         delta_seconds = self._calculate_delta(event, now)
-        self.duration_seconds += delta_seconds
+        stat_delta = delta_seconds if track_stats else 0.0
+        self.duration_seconds += stat_delta
 
         for player in event.players:
             if not player.primary_id:
@@ -217,7 +245,11 @@ class MatchAccumulator:
                 )
                 self.players[player.primary_id] = accumulator
             accumulator.match_guid = self.match_guid
-            accumulator.apply_update(player, delta_seconds)
+            accumulator.apply_update(
+                player,
+                stat_delta,
+                treat_none_on_ground_as_air=treat_none_on_ground_as_air,
+            )
 
     def player_by_ref(self, ref: PlayerRef | None) -> PlayerAccumulator | None:
         if ref is None:
@@ -268,6 +300,14 @@ class DemolyticsAggregator:
         self.active_session: SessionSnapshot | None = None
         self.current_match: MatchAccumulator | None = None
         self._status = "Waiting for Rocket League"
+        self._stats_tracking_excluded = False
+
+    def reset_tracking_state(self) -> None:
+        self.user_primary_id = None
+        self.active_session = None
+        self.current_match = None
+        self._stats_tracking_excluded = False
+        self._status = "Waiting for Rocket League"
 
     def handle_event(
         self,
@@ -315,6 +355,7 @@ class DemolyticsAggregator:
             live_players=live_players,
             user_primary_id=self.user_primary_id,
             status=self._status,
+            win_streak=self.active_session.win_streak if self.active_session else 0,
         )
 
     def end_active_session(self) -> None:
@@ -329,16 +370,34 @@ class DemolyticsAggregator:
         match_guid = event.match_guid or self.current_match_guid_or_new()
         if self.current_match is None or self.current_match.match_guid != match_guid:
             self.current_match = MatchAccumulator(match_guid=match_guid, timestamp=now)
+            self._stats_tracking_excluded = False
 
-        self.current_match.apply_update(event, now)
+        self._sync_exclusion_from_game(event.game)
+        freeplay = is_freeplay(event.players)
+        track_stats = not freeplay and not self._stats_tracking_excluded
+        inferred_mode = infer_game_mode(event.players)
+        treat_none_air = inferred_mode in SUPPORTED_MODES and not freeplay
+
+        self.current_match.apply_update(
+            event,
+            now,
+            track_stats=track_stats,
+            treat_none_on_ground_as_air=treat_none_air,
+        )
         self._resolve_user_from_target(event)
 
-        inferred_mode = self.current_match.game_mode
         if inferred_mode in SUPPORTED_MODES:
             return self._ensure_session_for_mode(inferred_mode, now)
 
         self._status = "Waiting for enough player data to infer mode"
         return None
+
+    def _sync_exclusion_from_game(self, game: GameState) -> None:
+        """Pause stat accumulation during replays and after a goal until play resumes."""
+        if game.replay or game.has_winner:
+            self._stats_tracking_excluded = True
+        else:
+            self._stats_tracking_excluded = False
 
     def _handle_match_ended(self, event: MatchEndedEvent) -> None:
         if self.current_match is None:
@@ -350,12 +409,18 @@ class DemolyticsAggregator:
 
         wins = self.active_session.wins + int(event.winner_team_num == user_team)
         losses = self.active_session.losses + int(event.winner_team_num != user_team)
+        win_streak = (
+            self.active_session.win_streak + 1
+            if event.winner_team_num == user_team
+            else 0
+        )
         self.active_session = SessionSnapshot(
             session_id=self.active_session.session_id,
             game_mode=self.active_session.game_mode,
             start_time=self.active_session.start_time,
             wins=wins,
             losses=losses,
+            win_streak=win_streak,
         )
 
     def _handle_lifecycle(
@@ -363,23 +428,31 @@ class DemolyticsAggregator:
         event: MatchLifecycleEvent,
         now: datetime,
     ) -> CompletedMatch | None:
+        if event.event_name in {"CountdownBegin", "RoundStarted"}:
+            self._stats_tracking_excluded = False
+
         if event.event_name in {"MatchCreated", "MatchInitialized"}:
             match_guid = event.match_guid or self.current_match_guid_or_new()
             if self.current_match is None or self.current_match.match_guid != match_guid:
                 self.current_match = MatchAccumulator(match_guid=match_guid, timestamp=now)
+                self._stats_tracking_excluded = False
             self._status = f"{event.event_name} received"
             return None
 
         if event.event_name == "MatchDestroyed" and self.current_match is not None:
             completed = self._complete_current_match(now)
             self.current_match = None
-            self._status = "Match saved"
+            self._status = "Match saved" if completed is not None else "Match not saved (training/freeplay)"
             return completed
 
         return None
 
     def _handle_statfeed(self, event: StatfeedEvent) -> None:
         if self.current_match is None or event.stat_type.lower() != "demolition":
+            return
+        if self._stats_tracking_excluded:
+            return
+        if len(self.current_match.players) <= 1:
             return
         inflicter = self.current_match.player_by_ref(event.main_target)
         victim = self.current_match.player_by_ref(event.secondary_target)
@@ -407,6 +480,8 @@ class DemolyticsAggregator:
 
     def _complete_current_match(self, now: datetime) -> CompletedMatch | None:
         if self.current_match is None or self.active_session is None:
+            return None
+        if not self.current_match.multiplayer_seen:
             return None
         user_result = self._user_result()
         return CompletedMatch(
@@ -456,6 +531,19 @@ def infer_game_mode(players: tuple[PlayerState, ...]) -> str:
         4: "2v2",
         6: "3v3",
     }.get(player_count, "unknown")
+
+
+def is_freeplay(players: tuple[PlayerState, ...]) -> bool:
+    """True when only one distinct PrimaryId is present (training / freeplay lobby)."""
+    distinct = {player.primary_id for player in players if player.primary_id}
+    return len(distinct) <= 1
+
+
+def _airborne_percentage(time_airborne: float, time_on_ground: float) -> float:
+    total = time_airborne + time_on_ground
+    if total <= 0:
+        return 0.0
+    return 100.0 * time_airborne / total
 
 
 def _weighted_average(weighted_sum: float, duration: float) -> float:

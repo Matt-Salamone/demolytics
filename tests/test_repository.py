@@ -73,6 +73,76 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(teammate["teammate_games"], 1)
         self.assertEqual(opponent["opponent_games"], 1)
 
+    def test_get_encounters_for_primary_ids_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            session = SessionSnapshot(
+                session_id="S1",
+                game_mode="2v2",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                wins=1,
+                losses=0,
+            )
+            repository.upsert_session(session)
+            repository.save_completed_match(
+                CompletedMatch(
+                    match_guid="M1",
+                    session_id="S1",
+                    timestamp=datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+                    game_mode="2v2",
+                    user_result="Win",
+                    duration_seconds=300,
+                    players=(
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Steam|111|0",
+                            player_name="User",
+                            team_num=0,
+                            is_user=True,
+                            stats={"score": 100},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Steam|222|0",
+                            player_name="Mate",
+                            team_num=0,
+                            is_user=False,
+                            stats={"score": 50},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Epic|333|0",
+                            player_name="Opponent",
+                            team_num=1,
+                            is_user=False,
+                            stats={"score": 40},
+                        ),
+                    ),
+                )
+            )
+            by_id = repository.get_encounters_for_primary_ids(("Steam|222|0", "Epic|999|0"))
+            self.assertIn("Steam|222|0", by_id)
+            self.assertEqual(int(by_id["Steam|222|0"]["teammate_games"]), 1)
+            self.assertEqual(int(by_id["Steam|222|0"]["opponent_games"]), 0)
+            self.assertNotIn("Epic|999|0", by_id)
+
+    def test_clear_all_data_removes_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            session = SessionSnapshot(
+                session_id="S1",
+                game_mode="2v2",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                wins=1,
+                losses=0,
+            )
+            repository.upsert_session(session)
+            repository.clear_all_data()
+            self.assertEqual(len(repository.list_matches()), 0)
+            self.assertEqual(len(repository.list_encounters()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

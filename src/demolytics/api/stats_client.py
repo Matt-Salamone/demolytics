@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import socket
 import threading
+from contextlib import suppress
 from collections.abc import Awaitable, Callable
 from queue import Queue
 from typing import Any
 
+from demolytics.api.json_stream import JsonStreamSplitter
 from demolytics.domain.events import StatsEvent, parse_message
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +31,7 @@ class StatsApiClient:
         self._event_listeners: list[EventListener] = []
         self._status_listeners: list[StatusListener] = []
         self._stop_requested = False
+        self._plain_tcp_mode = False
 
     @property
     def uri(self) -> str:
@@ -42,18 +46,63 @@ class StatsApiClient:
     def request_stop(self) -> None:
         self._stop_requested = True
 
+    async def _run_plain_tcp_session(self) -> None:
+        self._emit_status(f"connecting tcp json to {self.host}:{self.port}")
+        reader, writer = await asyncio.open_connection(
+            self.host,
+            self.port,
+            family=socket.AF_INET,
+        )
+        self._emit_status("connected")
+        splitter = JsonStreamSplitter()
+        try:
+            while not self._stop_requested:
+                chunk = await asyncio.wait_for(reader.read(65536), timeout=90.0)
+                if not chunk:
+                    break
+                for raw in splitter.feed(chunk):
+                    await self._handle_raw_message(raw)
+        except TimeoutError:
+            LOGGER.debug("Stats API TCP read idle timeout; reconnecting.")
+        finally:
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
+
     async def run_forever(self) -> None:
         try:
             import websockets
+            from websockets.exceptions import InvalidMessage
         except ImportError as exc:
             self._emit_status("websockets package is not installed")
             raise RuntimeError("Install the websockets package to use live ingestion.") from exc
 
         self._stop_requested = False
         while not self._stop_requested:
+            if self._plain_tcp_mode:
+                try:
+                    await self._run_plain_tcp_session()
+                except asyncio.CancelledError:
+                    self._emit_status("stopped")
+                    raise
+                except Exception as exc:  # noqa: BLE001 - reconnect loop must survive API downtime.
+                    LOGGER.debug("Stats API TCP session failed: %s", exc)
+                    self._emit_status("waiting for Rocket League Stats API")
+                await asyncio.sleep(self.reconnect_delay_seconds)
+                continue
+
             try:
                 self._emit_status(f"connecting to {self.uri}")
-                async with websockets.connect(self.uri) as websocket:
+                # Never use a system HTTP/SOCKS proxy for loopback. Some embedded WS
+                # stacks expect Origin; AF_INET avoids odd dual-stack loopback paths.
+                async with websockets.connect(
+                    self.uri,
+                    proxy=None,
+                    compression=None,
+                    user_agent_header=None,
+                    origin="http://127.0.0.1",
+                    family=socket.AF_INET,
+                ) as websocket:
                     self._emit_status("connected")
                     async for raw_message in websocket:
                         if self._stop_requested:
@@ -62,6 +111,13 @@ class StatsApiClient:
             except asyncio.CancelledError:
                 self._emit_status("stopped")
                 raise
+            except InvalidMessage as exc:
+                LOGGER.debug("Stats API WebSocket invalid HTTP response: %s", exc)
+                if not self._plain_tcp_mode:
+                    self._plain_tcp_mode = True
+                self._emit_status("Stats API: using TCP JSON stream")
+                await asyncio.sleep(0.5)
+                continue
             except Exception as exc:  # noqa: BLE001 - reconnect loop must survive API downtime.
                 LOGGER.debug("Stats API connection failed: %s", exc)
                 self._emit_status("waiting for Rocket League Stats API")

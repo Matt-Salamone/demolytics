@@ -12,11 +12,21 @@ APP_DIR_NAME = "Demolytics"
 SETTINGS_FILE_NAME = "settings.json"
 DEFAULT_PORT = 49123
 
+DEFAULT_GLANCE_STATS: tuple[str, ...] = (
+    "shooting_percentage",
+    "demos_inflicted",
+    "demos_taken",
+    "avg_boost",
+    "avg_speed",
+    "airborne_percentage",
+)
+
 
 @dataclass
 class AppSettings:
     websocket_port: int = DEFAULT_PORT
     visible_stats: list[str] = field(default_factory=lambda: list(SUPPORTED_STAT_KEYS))
+    glance_stats: list[str] = field(default_factory=lambda: list(DEFAULT_GLANCE_STATS))
     database_path: str | None = None
     install_dir: str | None = None
 
@@ -63,9 +73,21 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(visible_stats, list):
         visible_stats = list(SUPPORTED_STAT_KEYS)
 
+    glance_stats = raw.get("glance_stats")
+    if not isinstance(glance_stats, list):
+        glance_stats = list(DEFAULT_GLANCE_STATS)
+    glance_stats = [str(key) for key in glance_stats if str(key) in SUPPORTED_STAT_KEYS]
+    if not glance_stats:
+        glance_stats = list(DEFAULT_GLANCE_STATS)
+
+    visible_stats = [str(key) for key in visible_stats if str(key) in SUPPORTED_STAT_KEYS]
+    if not visible_stats:
+        visible_stats = list(SUPPORTED_STAT_KEYS)
+
     return {
         "websocket_port": int(raw.get("websocket_port", DEFAULT_PORT)),
-        "visible_stats": [str(key) for key in visible_stats],
+        "visible_stats": visible_stats,
+        "glance_stats": glance_stats,
         "database_path": raw.get("database_path"),
         "install_dir": raw.get("install_dir"),
     }

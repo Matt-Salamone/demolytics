@@ -31,6 +31,7 @@ STAT_DEFINITIONS: tuple[StatDefinition, ...] = (
     StatDefinition("time_powerslide", "Time Powerslide", "s"),
     StatDefinition("time_on_ground", "Time on Ground", "s"),
     StatDefinition("time_airborne", "Time Airborne", "s"),
+    StatDefinition("airborne_percentage", "Airborne %", "%"),
     StatDefinition("avg_dist_to_ball", "Average Distance to Ball", supported=False),
     StatDefinition("time_behind_ball", "Time Behind Ball", supported=False),
     StatDefinition("time_in_front_of_ball", "Time In Front of Ball", supported=False),

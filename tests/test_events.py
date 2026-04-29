@@ -29,6 +29,42 @@ class EventParsingTests(unittest.TestCase):
         assert isinstance(event, MatchEndedEvent)
         self.assertEqual(event.winner_team_num, 1)
 
+    def test_parse_update_state_when_data_is_json_string(self) -> None:
+        """Live Stats API wraps UpdateState.Data as an escaped JSON string (see debug logs)."""
+        inner = {
+            "MatchGuid": "MG-STRING",
+            "Players": [
+                {
+                    "Name": "Bot",
+                    "PrimaryId": "Steam|9|0",
+                    "Shortcut": 1,
+                    "TeamNum": 0,
+                    "Score": 0,
+                    "Goals": 0,
+                    "Shots": 0,
+                    "Assists": 0,
+                    "Saves": 0,
+                    "Touches": 0,
+                    "CarTouches": 0,
+                    "Demos": 0,
+                }
+            ],
+            "Game": {
+                "Teams": [
+                    {"Name": "Blue", "TeamNum": 0, "Score": 0},
+                    {"Name": "Orange", "TeamNum": 1, "Score": 0},
+                ]
+            },
+        }
+        envelope = {"Event": "UpdateState", "Data": json.dumps(inner)}
+        event = parse_message(json.dumps(envelope))
+
+        self.assertIsInstance(event, UpdateStateEvent)
+        assert isinstance(event, UpdateStateEvent)
+        self.assertEqual(event.match_guid, "MG-STRING")
+        self.assertEqual(len(event.players), 1)
+        self.assertEqual(event.players[0].name, "Bot")
+
     def test_parse_statfeed_event(self) -> None:
         payload = {
             "Event": "StatfeedEvent",
