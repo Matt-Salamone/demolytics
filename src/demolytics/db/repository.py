@@ -215,11 +215,18 @@ class DemolyticsRepository:
     def get_global_baseline(self, game_mode: str | None = None) -> dict[str, float]:
         return self._averages(is_user=False, game_mode=game_mode)
 
-    def list_encounters(self, limit: int = 250) -> list[sqlite3.Row]:
+    def list_encounters(self, limit: int = 250, *, sort_by: str = "recent") -> list[sqlite3.Row]:
+        order_clause = (
+            "ORDER BY last_played_at DESC, player_name ASC"
+            if sort_by == "recent"
+            else "ORDER BY total_games DESC, player_name ASC"
+        )
+        if sort_by not in {"recent", "games"}:
+            raise ValueError(f"sort_by must be 'recent' or 'games', got {sort_by!r}")
         with self.connect() as connection:
             return list(
                 connection.execute(
-                    """
+                    f"""
                     SELECT
                         p.primary_id,
                         MAX(p.player_name) AS player_name,
@@ -241,7 +248,8 @@ class DemolyticsRepository:
                             CASE WHEN p.team_num != u.team_num AND m.user_result = 'Loss'
                             THEN 1 ELSE 0 END
                         ) AS opponent_losses,
-                        COUNT(*) AS total_games
+                        COUNT(*) AS total_games,
+                        MAX(m.timestamp) AS last_played_at
                     FROM player_match_stats p
                     JOIN player_match_stats u
                         ON u.match_guid = p.match_guid
@@ -249,7 +257,7 @@ class DemolyticsRepository:
                     JOIN matches m ON m.match_guid = p.match_guid
                     WHERE p.is_user = 0
                     GROUP BY p.primary_id
-                    ORDER BY total_games DESC, player_name ASC
+                    {order_clause}
                     LIMIT ?
                     """,
                     (limit,),

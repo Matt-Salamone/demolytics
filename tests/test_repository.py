@@ -112,6 +112,99 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(opponent["opponent_games"], 2)
         self.assertEqual(int(opponent["opponent_wins"]), 1)
         self.assertEqual(int(opponent["opponent_losses"]), 1)
+        self.assertEqual(int(teammate["total_games"]), 2)
+        self.assertEqual(int(opponent["total_games"]), 2)
+
+    def test_list_encounters_sort_by_recent_vs_games(self) -> None:
+        def match(
+            guid: str,
+            ts: datetime,
+            mate_pid: str,
+            mate_name: str,
+        ) -> CompletedMatch:
+            return CompletedMatch(
+                match_guid=guid,
+                session_id="S1",
+                timestamp=ts,
+                game_mode="2v2",
+                user_result="Win",
+                duration_seconds=300,
+                players=(
+                    PlayerStatsSnapshot(
+                        match_guid=guid,
+                        primary_id="Steam|111|0",
+                        player_name="User",
+                        team_num=0,
+                        is_user=True,
+                        stats={"score": 100},
+                    ),
+                    PlayerStatsSnapshot(
+                        match_guid=guid,
+                        primary_id=mate_pid,
+                        player_name=mate_name,
+                        team_num=0,
+                        is_user=False,
+                        stats={"score": 50},
+                    ),
+                    PlayerStatsSnapshot(
+                        match_guid=guid,
+                        primary_id="Epic|333|0",
+                        player_name="Other",
+                        team_num=1,
+                        is_user=False,
+                        stats={"score": 40},
+                    ),
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            repository.upsert_session(
+                SessionSnapshot(
+                    session_id="S1",
+                    game_mode="2v2",
+                    start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                    wins=0,
+                    losses=0,
+                )
+            )
+            for i in range(5):
+                repository.save_completed_match(
+                    match(
+                        f"M{i}",
+                        datetime(2026, 1, 2, i, 0, tzinfo=UTC),
+                        "Steam|heavy|0",
+                        "Heavy",
+                    )
+                )
+            repository.save_completed_match(
+                match(
+                    "M_recent",
+                    datetime(2026, 1, 10, 0, 0, tzinfo=UTC),
+                    "Steam|recent|0",
+                    "RecentPal",
+                )
+            )
+
+            by_recent = repository.list_encounters(sort_by="recent")
+            by_games = repository.list_encounters(sort_by="games")
+
+        names_recent = [r["player_name"] for r in by_recent]
+        names_games = [r["player_name"] for r in by_games]
+        self.assertLess(names_recent.index("RecentPal"), names_recent.index("Heavy"))
+        self.assertLess(names_games.index("Heavy"), names_games.index("RecentPal"))
+        heavy = next(r for r in by_games if r["player_name"] == "Heavy")
+        recent_pal = next(r for r in by_recent if r["player_name"] == "RecentPal")
+        self.assertEqual(int(heavy["total_games"]), 5)
+        self.assertEqual(int(recent_pal["total_games"]), 1)
+
+    def test_list_encounters_invalid_sort(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            with self.assertRaises(ValueError):
+                repository.list_encounters(sort_by="nope")
 
     def test_get_encounters_for_primary_ids_subset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

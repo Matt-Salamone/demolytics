@@ -539,15 +539,23 @@ class DemolyticsApp(ctk.CTk):
     def _build_encounters_tab(self) -> None:
         self.encounters_tab.grid_columnconfigure(0, weight=1)
         self.encounters_tab.grid_rowconfigure(1, weight=1)
+        self.encounters_frame = ctk.CTkScrollableFrame(self.encounters_tab)
+        self.encounters_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+        self.encounters_frame.grid_columnconfigure(0, weight=1)
         controls = ctk.CTkFrame(self.encounters_tab, fg_color="transparent")
         controls.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.encounter_search = ctk.CTkEntry(controls, placeholder_text="Search player name")
         self.encounter_search.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.encounter_search.bind("<KeyRelease>", lambda _event: self._refresh_encounters())
+        self.encounter_sort_combo = ctk.CTkComboBox(
+            controls,
+            width=160,
+            values=("Recent", "Most games"),
+            command=lambda _choice: self._refresh_encounters(),
+        )
+        self.encounter_sort_combo.set("Recent")
+        self.encounter_sort_combo.pack(side="left", padx=(0, 8))
         ctk.CTkButton(controls, text="Refresh", command=self._refresh_encounters).pack(side="left")
-        self.encounters_frame = ctk.CTkScrollableFrame(self.encounters_tab)
-        self.encounters_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
-        self.encounters_frame.grid_columnconfigure(0, weight=1)
 
     def _start_ingestion(self) -> None:
         if self.api_thread is not None:
@@ -873,8 +881,16 @@ class DemolyticsApp(ctk.CTk):
         self.encounter_rows.clear()
 
         search = self.encounter_search.get().lower() if hasattr(self, "encounter_search") else ""
+        sort_label = (
+            self.encounter_sort_combo.get()
+            if hasattr(self, "encounter_sort_combo")
+            else "Recent"
+        )
+        sort_by = "games" if sort_label == "Most games" else "recent"
         encounters = [
-            row for row in self.repository.list_encounters() if search in str(row["player_name"]).lower()
+            row
+            for row in self.repository.list_encounters(sort_by=sort_by)
+            if search in str(row["player_name"]).lower()
         ]
         if not encounters:
             label = ctk.CTkLabel(self.encounters_frame, text="No encounters yet.")
@@ -890,8 +906,10 @@ class DemolyticsApp(ctk.CTk):
             tl = int(encounter["teammate_losses"])
             ow = int(encounter["opponent_wins"])
             ol = int(encounter["opponent_losses"])
+            total = int(encounter["total_games"])
             text = (
                 f"{encounter['player_name']}  |  "
+                f"{total} games  |  "
                 f"Teammate {tw}-{tl}  |  "
                 f"Opponent {ow}-{ol}"
             )
