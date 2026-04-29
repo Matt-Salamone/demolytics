@@ -18,11 +18,37 @@ class BallchasingUploadError(Exception):
     """Raised when the Ballchasing API returns an error or an unexpected response."""
 
 
-def _parse_id_from_body(raw: str) -> str:
-    payload = json.loads(raw) if raw else {}
+def _log_ballchasing_upload_response(http_status: int, raw: str) -> str:
+    """Parse JSON, log id/location (and error for duplicates), return replay id."""
+    try:
+        payload = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        LOGGER.warning(
+            "Ballchasing upload HTTP %s returned non-JSON body (first 500 chars): %r",
+            http_status,
+            raw[:500],
+        )
+        raise BallchasingUploadError(f"Invalid JSON from Ballchasing: {raw[:500]}") from None
+
     replay_id = payload.get("id")
     if not isinstance(replay_id, str) or not replay_id:
+        LOGGER.warning(
+            "Ballchasing upload HTTP %s JSON missing id: %s",
+            http_status,
+            json.dumps(payload, default=str)[:800],
+        )
         raise BallchasingUploadError(f"Missing replay id in response: {raw[:500]}")
+
+    location = payload.get("location")
+    err = payload.get("error")
+    LOGGER.info(
+        "Ballchasing upload HTTP %s ok: replay_id=%s location=%s%s",
+        http_status,
+        replay_id,
+        location if isinstance(location, str) else None,
+        f" error={err!r}" if err else "",
+    )
+    LOGGER.debug("Ballchasing upload full response JSON: %s", json.dumps(payload, default=str))
     return replay_id
 
 
@@ -75,16 +101,26 @@ def upload_replay_file(
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read().decode("utf-8", errors="replace")
                 if response.status not in (200, 201):
+                    LOGGER.warning(
+                        "Ballchasing upload unexpected HTTP %s body (first 500 chars): %r",
+                        response.status,
+                        raw[:500],
+                    )
                     raise BallchasingUploadError(f"Unexpected status {response.status}: {raw[:500]}")
-                return _parse_id_from_body(raw)
+                return _log_ballchasing_upload_response(response.status, raw)
         except urllib.error.HTTPError as exc:
             body_txt = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
             if exc.code == 409:
-                return _parse_id_from_body(body_txt)
+                return _log_ballchasing_upload_response(exc.code, body_txt)
             if exc.code == 429 and attempt < 2:
                 LOGGER.debug("Ballchasing rate limited (429), retrying: %s", body_txt[:200])
                 last_exc = exc
                 continue
+            LOGGER.warning(
+                "Ballchasing upload HTTP %s body (first 500 chars): %r",
+                exc.code,
+                body_txt[:500],
+            )
             raise BallchasingUploadError(f"HTTP {exc.code}: {body_txt[:500] or exc.reason}") from exc
         except urllib.error.URLError as exc:
             last_exc = exc

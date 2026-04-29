@@ -607,8 +607,8 @@ class DemolyticsApp(ctk.CTk):
                         lambda msg=_BALLCHASING_NO_REPLAY_SNACKBAR: self._show_snackbar(msg, success=False),
                     )
                     continue
-                upload_replay_file(replay_path, job["token"], job["visibility"])
-                LOGGER.info("Uploaded replay to Ballchasing: %s", replay_path.name)
+                replay_id = upload_replay_file(replay_path, job["token"], job["visibility"])
+                LOGGER.info("Ballchasing worker: uploaded %s replay_id=%s", replay_path.name, replay_id)
                 name = replay_path.name
                 self.after(
                     0,
