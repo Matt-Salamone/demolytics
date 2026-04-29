@@ -50,7 +50,7 @@ LOGGER = logging.getLogger(__name__)
 _BALLCHASING_POST_MATCH_DELAY_S = 4.0
 
 _BALLCHASING_NO_REPLAY_SNACKBAR = (
-    "Could not find a replay for Ballchasing. Make sure your replays are being saved so matches write .replay files to your Demos folder."
+    "Could not find a replay for Ballchasing. Make sure you are saving the replay from the post-match menu."
 )
 
 

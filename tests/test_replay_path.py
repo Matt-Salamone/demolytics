@@ -8,11 +8,17 @@ from pathlib import Path
 
 from demolytics.integrations.replay_path import (
     path_from_replay_created_data,
+    replay_demos_directories,
     resolve_replay_path,
 )
 
 
 class ReplayPathTests(unittest.TestCase):
+    def test_replay_demos_directories_end_in_tagame_demos(self) -> None:
+        for p in replay_demos_directories():
+            self.assertEqual(p.name, "Demos")
+            self.assertEqual(p.parent.name, "TAGame")
+
     def test_path_from_replay_name_in_demos_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             demos = Path(tmp)
