@@ -19,6 +19,10 @@ from demolytics.domain.goal_insights import compute_goal_insight
 
 SUPPORTED_MODES = {"1v1", "2v2", "3v3"}
 
+# While loading into 2v2, only 1–2 players with IDs may be visible; defer "1v1" so the session
+# is not torn down and recreated when the full lobby (4) appears a moment later.
+MODE_SESSION_LOADING_SECONDS = 5.0
+
 
 @dataclass(frozen=True)
 class SessionSnapshot:
@@ -394,6 +398,8 @@ class DemolyticsAggregator:
         self._goal_insight: str | None = None
         self._prev_team_scores: dict[int, int] = {}
         self._prev_player_goals: dict[str, int] = {}
+        self._match_distinct_id_peak: int = 0
+        self._current_match_start_wall: datetime | None = None
 
     def reset_tracking_state(self) -> None:
         self.user_primary_id = None
@@ -408,6 +414,8 @@ class DemolyticsAggregator:
         self._goal_insight = None
         self._prev_team_scores = {}
         self._prev_player_goals = {}
+        self._match_distinct_id_peak = 0
+        self._current_match_start_wall = None
         self._status = "Waiting for Rocket League"
 
     def handle_event(
@@ -538,6 +546,8 @@ class DemolyticsAggregator:
             self._last_team_score_sum = None
             self._prev_team_scores = {}
             self._prev_player_goals = {}
+            self._match_distinct_id_peak = 0
+            self._current_match_start_wall = now
             self._goal_insight = None
 
         new_team_scores = {t.team_num: t.score for t in event.game.teams}
@@ -557,7 +567,18 @@ class DemolyticsAggregator:
             self._ensure_winner_and_record_session_outcome(self.current_match)
         track_stats = self._should_accumulate_match_stats(event.game, freeplay)
         self._block_derived_stats = not track_stats
-        inferred_mode = infer_game_mode(event.players)
+        distinct_ids = len({p.primary_id for p in event.players if p.primary_id})
+        self._match_distinct_id_peak = max(self._match_distinct_id_peak, distinct_ids)
+        inferred_mode = infer_game_mode_from_count(self._match_distinct_id_peak)
+        t_in = max(
+            (now - self._current_match_start_wall).total_seconds()
+            if self._current_match_start_wall
+            else 0.0,
+            float(event.game.elapsed or 0.0),
+        )
+        inferred_for_session = _inferred_mode_for_session(
+            inferred_mode, self._match_distinct_id_peak, t_in, self.active_session
+        )
         treat_none_air = inferred_mode in SUPPORTED_MODES and not freeplay
 
         self.current_match.apply_update(
@@ -566,6 +587,10 @@ class DemolyticsAggregator:
             track_stats=track_stats,
             treat_none_on_ground_as_air=treat_none_air,
         )
+        if inferred_for_session == "unknown" and self.active_session is not None:
+            self.current_match.game_mode = self.active_session.game_mode
+        else:
+            self.current_match.game_mode = inferred_mode
         self._resolve_user_from_target(event)
 
         if (
@@ -615,8 +640,8 @@ class DemolyticsAggregator:
             if player.primary_id:
                 self._prev_player_goals[player.primary_id] = player.goals
 
-        if inferred_mode in SUPPORTED_MODES:
-            return self._ensure_session_for_mode(inferred_mode, now)
+        if inferred_for_session in SUPPORTED_MODES:
+            return self._ensure_session_for_mode(inferred_for_session, now)
 
         self._status = "Waiting for enough player data to infer mode"
         return None
@@ -712,6 +737,8 @@ class DemolyticsAggregator:
                 self._ensure_winner_and_record_session_outcome(self.current_match)
             if self.current_match is None or self.current_match.match_guid != match_guid:
                 self.current_match = MatchAccumulator(match_guid=match_guid, timestamp=now)
+                self._match_distinct_id_peak = 0
+                self._current_match_start_wall = now
             self._paused_until_kickoff = False
             self._last_team_score_sum = None
             self._prev_team_scores = {}
@@ -744,6 +771,8 @@ class DemolyticsAggregator:
             self._prev_team_scores = {}
             self._prev_player_goals = {}
             self._goal_insight = None
+            self._match_distinct_id_peak = 0
+            self._current_match_start_wall = None
             self._status = "Match saved" if completed is not None else "Match not saved (training/freeplay)"
             return completed
 
@@ -846,13 +875,32 @@ class DemolyticsAggregator:
         return f"local-{uuid.uuid4()}"
 
 
+def infer_game_mode_from_count(player_count: int) -> str:
+    return {2: "1v1", 4: "2v2", 6: "3v3"}.get(player_count, "unknown")
+
+
+def _inferred_mode_for_session(
+    mode_from_peak: str,
+    peak: int,
+    time_in_match: float,
+    active_session: SessionSnapshot | None,
+) -> str:
+    """2v2 load often shows 1–2 PrimaryIds first; don't flip the session to 1v1 until the lobby stabilizes."""
+    if (
+        mode_from_peak == "1v1"
+        and peak < 4
+        and time_in_match < MODE_SESSION_LOADING_SECONDS
+        and active_session is not None
+        and active_session.game_mode == "2v2"
+    ):
+        return "unknown"
+    return mode_from_peak
+
+
 def infer_game_mode(players: tuple[PlayerState, ...]) -> str:
-    player_count = len({player.primary_id for player in players if player.primary_id})
-    return {
-        2: "1v1",
-        4: "2v2",
-        6: "3v3",
-    }.get(player_count, "unknown")
+    return infer_game_mode_from_count(
+        len({p.primary_id for p in players if p.primary_id}),
+    )
 
 
 def is_freeplay(players: tuple[PlayerState, ...]) -> bool:

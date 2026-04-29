@@ -132,9 +132,9 @@ class GoalInsightTests(unittest.TestCase):
             _p("4", "D", 1, time_zero_boost=40.0),
         )
         teams = (_t(0, "Blue", 0, 30, 0, 50), _t(1, "Orange", 0, 40, 0, 50))
-        msg = compute_goal_insight(1, players, teams, 5.0, None, user_team_num=1)
+        msg = compute_goal_insight(1, players, teams, 3.0, None, user_team_num=1)
         self.assertIsNone(msg)
-        msg_ok = compute_goal_insight(1, players, teams, 20.0, None, user_team_num=1)
+        msg_ok = compute_goal_insight(1, players, teams, 5.0, None, user_team_num=1)
         self.assertIsNotNone(msg_ok)
 
     def test_1v1_team_insight_when_player_outliers_skipped(self) -> None:

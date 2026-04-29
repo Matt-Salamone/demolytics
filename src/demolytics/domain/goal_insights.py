@@ -4,7 +4,9 @@ from typing import Callable, Protocol
 
 from demolytics.domain.stats import STAT_LABELS
 
-MIN_LOBBY_SECONDS = 15.0
+# Floor for "enough" match time so team/player stats are comparable (in-game clock or accumulated).
+# Kept low enough that early goals still get insights when the outlier logic finds a signal.
+MIN_LOBBY_SECONDS = 4.0
 OUTLIER_RATIO = 1.5
 
 

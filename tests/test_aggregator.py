@@ -414,7 +414,81 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(agg.snapshot().live_user_stats.get("goals"), 3.0)
         self.assertEqual(agg.snapshot().live_user_stats.get("score"), 100.0)
 
-    def test_frozen_user_stats_between_completed_match_and_next_match(self) -> None:
+    def test_session_persists_when_next_match_loads_with_two_players_first(self) -> None:
+        """2v2 often reports two PrimaryIds before the full lobby spawns; avoid 1v1 → 2v2 session churn."""
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        full = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        agg = DemolyticsAggregator()
+        r1 = agg.handle_event(parse_message(full), t0)
+        self.assertIsNotNone(r1.started_session)
+        assert r1.started_session is not None
+        sid = r1.started_session.session_id
+
+        agg.handle_event(
+            MatchLifecycleEvent(event_name="MatchDestroyed", match_guid="MATCH-1"),
+            datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        )
+        p_a = PlayerState(
+            name="A",
+            primary_id="Steam|a|0",
+            shortcut=1,
+            team_num=0,
+            speed=1000.0,
+            boost=50,
+        )
+        p_b = PlayerState(
+            name="B",
+            primary_id="Steam|b|0",
+            shortcut=2,
+            team_num=1,
+            speed=1000.0,
+            boost=50,
+        )
+        teams_0 = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+        agg.handle_event(
+            UpdateStateEvent(
+                "MATCH-NEXT",
+                (p_a, p_b),
+                GameState(teams=teams_0, elapsed=1.0),
+            ),
+            datetime(2026, 1, 1, 0, 2, tzinfo=UTC),
+        )
+        s_partial = agg.snapshot().session
+        self.assertIsNotNone(s_partial)
+        assert s_partial is not None
+        self.assertEqual(s_partial.session_id, sid)
+        self.assertEqual(s_partial.game_mode, "2v2")
+
+        p_c = PlayerState(
+            name="C",
+            primary_id="Epic|c|0",
+            shortcut=3,
+            team_num=0,
+            speed=1000.0,
+            boost=50,
+        )
+        p_d = PlayerState(
+            name="D",
+            primary_id="Epic|d|0",
+            shortcut=4,
+            team_num=1,
+            speed=1000.0,
+            boost=50,
+        )
+        r2 = agg.handle_event(
+            UpdateStateEvent(
+                "MATCH-NEXT",
+                (p_a, p_b, p_c, p_d),
+                GameState(teams=teams_0, elapsed=2.0),
+            ),
+            datetime(2026, 1, 1, 0, 3, tzinfo=UTC),
+        )
+        self.assertIsNone(r2.started_session)
+        s_final = agg.snapshot().session
+        self.assertIsNotNone(s_final)
+        assert s_final is not None
+        self.assertEqual(s_final.session_id, sid)
+
         aggregator = DemolyticsAggregator()
         payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
         aggregator.handle_event(parse_message(payload), datetime(2026, 1, 1, tzinfo=UTC))

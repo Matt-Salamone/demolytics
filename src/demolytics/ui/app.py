@@ -215,7 +215,7 @@ class DemolyticsApp(ctk.CTk):
             insight_wrap,
             text=(
                 "After each goal, a standout lobby or team stat appears here "
-                "(needs ~15s of match time on the clock)."
+                "(needs a few seconds of match time on the clock)."
             ),
             font=ctk.CTkFont(size=15),
             wraplength=1020,
@@ -540,7 +540,7 @@ class DemolyticsApp(ctk.CTk):
                 self.glance_goal_insight_label.configure(
                     text=(
                         "After each goal, a standout lobby or team stat appears here "
-                        "(needs ~15s of match time on the clock)."
+                        "(needs a few seconds of match time on the clock)."
                     ),
                     text_color=("gray30", "gray80"),
                     font=ctk.CTkFont(size=15),
