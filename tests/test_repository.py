@@ -185,6 +185,67 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(len(repository.list_matches()), 0)
             self.assertEqual(len(repository.list_encounters()), 0)
 
+    def test_clear_performance_statistics_preserving_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            session = SessionSnapshot(
+                session_id="S1",
+                game_mode="2v2",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                wins=1,
+                losses=0,
+            )
+            repository.upsert_session(session)
+            repository.save_completed_match(
+                CompletedMatch(
+                    match_guid="M1",
+                    session_id="S1",
+                    timestamp=datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+                    game_mode="2v2",
+                    user_result="Win",
+                    duration_seconds=300,
+                    players=(
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Steam|111|0",
+                            player_name="User",
+                            team_num=0,
+                            is_user=True,
+                            stats={"score": 500, "goals": 2, "shots": 4, "avg_boost": 50},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Steam|222|0",
+                            player_name="Mate",
+                            team_num=0,
+                            is_user=False,
+                            stats={"score": 250, "goals": 1, "shots": 2, "avg_boost": 40},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M1",
+                            primary_id="Epic|333|0",
+                            player_name="Opponent",
+                            team_num=1,
+                            is_user=False,
+                            stats={"score": 300, "goals": 1, "shots": 3, "avg_boost": 35},
+                        ),
+                    ),
+                )
+            )
+
+            repository.clear_performance_statistics_preserving_matches()
+
+            user_averages = repository.get_user_averages(game_mode="2v2")
+            self.assertEqual(user_averages["score"], 0)
+            self.assertEqual(user_averages["goals"], 0)
+            encounters = repository.list_encounters()
+            self.assertEqual(len(encounters), 2)
+            teammate = next(row for row in encounters if row["player_name"] == "Mate")
+            self.assertEqual(int(teammate["teammate_wins"]), 1)
+            self.assertEqual(int(teammate["teammate_losses"]), 0)
+            self.assertEqual(len(repository.list_matches()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

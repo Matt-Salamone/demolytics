@@ -423,6 +423,21 @@ class DemolyticsAggregator:
         self._current_match_start_wall = None
         self._status = "Waiting for Rocket League"
 
+    def reset_session_and_frozen_stats_after_db_performance_clear(self) -> None:
+        """Align in-memory session counters and frozen post-match stats with a DB stats reset."""
+        if self.active_session is not None:
+            s = self.active_session
+            self.active_session = SessionSnapshot(
+                session_id=s.session_id,
+                game_mode=s.game_mode,
+                start_time=s.start_time,
+                wins=0,
+                losses=0,
+                win_streak=0,
+            )
+        self._frozen_user_stats_between_matches = None
+        self._frozen_user_team_stats = None
+
     def handle_event(
         self,
         event: StatsEvent,

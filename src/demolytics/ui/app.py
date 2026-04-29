@@ -1096,6 +1096,23 @@ class DemolyticsApp(ctk.CTk):
         ctk.CTkLabel(
             data_inner,
             text=(
+                "Reset saved performance numbers (per-match stats, session win/loss totals, and "
+                "aggregates on the Stats tab) while keeping match history and Encounters "
+                "(players you have seen and your record with or against each)."
+            ),
+            wraplength=440,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(0, 8))
+        ctk.CTkButton(
+            data_inner,
+            text="Reset performance statistics…",
+            command=lambda: (modal.destroy(), self._confirm_reset_performance_statistics()),
+        ).pack(anchor="w", pady=(0, 16))
+
+        ctk.CTkLabel(
+            data_inner,
+            text=(
                 "Deletes all saved matches, per-match player rows, sessions, and encounter counts "
                 "from the local database. Your Settings file is not removed."
             ),
@@ -1137,6 +1154,46 @@ class DemolyticsApp(ctk.CTk):
         btn_row.pack(fill="x", padx=16, pady=(8, 12))
         ctk.CTkButton(btn_row, text="Save", command=save).pack(side="left", padx=(0, 8))
         ctk.CTkButton(btn_row, text="Cancel", command=modal.destroy).pack(side="left")
+
+    def _confirm_reset_performance_statistics(self) -> None:
+        confirm = ctk.CTkToplevel(self)
+        confirm.title("Reset performance statistics")
+        confirm.geometry("440x260")
+        confirm.grab_set()
+        ctk.CTkLabel(
+            confirm,
+            text=(
+                "This clears saved per-match performance stats and session win/loss totals. "
+                "Match history and Encounters (your record with or against each player) are kept. "
+                "This cannot be undone."
+            ),
+            wraplength=400,
+            justify="left",
+        ).pack(padx=20, pady=20)
+
+        actions = ctk.CTkFrame(confirm, fg_color="transparent")
+        actions.pack(pady=(0, 16))
+
+        def do_reset() -> None:
+            self.repository.clear_performance_statistics_preserving_matches()
+            self.aggregator.reset_session_and_frozen_stats_after_db_performance_clear()
+            self.snapshot = self.aggregator.snapshot()
+            if self.snapshot.session:
+                self.repository.upsert_session(self.snapshot.session)
+            confirm.destroy()
+            self._refresh_all_views()
+            messagebox.showinfo(
+                "Demolytics",
+                "Performance statistics were reset. Encounters and match history were kept.",
+            )
+
+        ctk.CTkButton(actions, text="Cancel", width=100, command=confirm.destroy).pack(side="left", padx=8)
+        ctk.CTkButton(
+            actions,
+            text="Reset stats",
+            width=120,
+            command=do_reset,
+        ).pack(side="left", padx=8)
 
     def _confirm_reset_database(self) -> None:
         confirm = ctk.CTkToplevel(self)

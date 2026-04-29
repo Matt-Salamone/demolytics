@@ -100,6 +100,13 @@ class DemolyticsRepository:
             connection.execute("DELETE FROM matches")
             connection.execute("DELETE FROM sessions")
 
+    def clear_performance_statistics_preserving_matches(self) -> None:
+        """Zero per-match stat columns and session W/L; keeps matches and encounter history."""
+        assignments = ", ".join(f"{key} = 0" for key in SUPPORTED_STAT_KEYS)
+        with self.connect() as connection:
+            connection.execute(f"UPDATE player_match_stats SET {assignments}")
+            connection.execute("UPDATE sessions SET wins = 0, losses = 0")
+
     def upsert_session(self, session: SessionSnapshot) -> None:
         with self.connect() as connection:
             connection.execute(
