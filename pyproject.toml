@@ -17,6 +17,9 @@ dependencies = [
 dev = [
     "pytest",
 ]
+build = [
+    "pyinstaller>=6",
+]
 
 [project.scripts]
 demolytics = "demolytics.main:main"
