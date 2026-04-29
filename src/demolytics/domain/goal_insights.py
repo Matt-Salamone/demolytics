@@ -8,6 +8,9 @@ from demolytics.domain.stats import STAT_LABELS
 MIN_LOBBY_SECONDS = 4.0
 OUTLIER_RATIO = 1.5
 
+# Rocket League often omits on-ground state for other cars; without ground time, airborne % is meaningless.
+MIN_VISIBLE_GROUND_SECONDS = 0.5
+
 # Rotated when no outlier fires; first usable stat wins.
 _FALLBACK_STAT_KEYS = (
     "avg_boost",
@@ -25,6 +28,20 @@ class _PlayerStatsLike(Protocol):
     team_num: int
     is_user: bool
     stats: dict[str, float]
+
+
+def _airborne_stat_visible(p: _PlayerStatsLike) -> bool:
+    """True when API has reported wheel contact / on-ground time for this car."""
+    return float(p.stats.get("time_on_ground", 0.0)) >= MIN_VISIBLE_GROUND_SECONDS
+
+
+def _airborne_comparison_trustworthy(
+    user: _PlayerStatsLike, peers: tuple[_PlayerStatsLike, ...]
+) -> bool:
+    """Only compare airborne % when ground time exists for everyone in the comparison."""
+    if not _airborne_stat_visible(user):
+        return False
+    return all(_airborne_stat_visible(p) for p in peers)
 
 
 def compute_goal_insight(
@@ -106,6 +123,8 @@ def _user_vs_peer_median_outliers(
         ("demos_taken", True),
         ("airborne_percentage", True),
     ):
+        if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, peers):
+            continue
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         med = _median(values)
         if med <= 1e-6:
@@ -174,6 +193,8 @@ def _fallback_user_insight(
     start = abs(insight_salt) % len(_FALLBACK_STAT_KEYS)
     for offset in range(len(_FALLBACK_STAT_KEYS)):
         stat_key = _FALLBACK_STAT_KEYS[(start + offset) % len(_FALLBACK_STAT_KEYS)]
+        if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, peers):
+            continue
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         med = _median(values)
         uv = float(user.stats.get(stat_key, 0.0))

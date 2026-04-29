@@ -14,11 +14,18 @@ def _p(
     time_zero_boost: float = 10.0,
     demos_inflicted: float = 0.0,
     demos_taken: float = 0.0,
-    airborne_percentage: float = 20.0,
+    time_on_ground: float = 100.0,
+    time_airborne: float = 0.0,
+    airborne_percentage: float | None = None,
     avg_boost: float = 50.0,
     shooting_percentage: float = 25.0,
     is_user: bool = False,
 ) -> PlayerStatsSnapshot:
+    total_ground_air = time_on_ground + time_airborne
+    if airborne_percentage is None:
+        ap = (100.0 * time_airborne / total_ground_air) if total_ground_air > 0 else 0.0
+    else:
+        ap = airborne_percentage
     stats = {
         "score": 100.0,
         "goals": 0.0,
@@ -37,9 +44,9 @@ def _p(
         "time_boosting": 0.0,
         "time_supersonic": 0.0,
         "time_powerslide": 0.0,
-        "time_on_ground": 100.0,
-        "time_airborne": 0.0,
-        "airborne_percentage": airborne_percentage,
+        "time_on_ground": time_on_ground,
+        "time_airborne": time_airborne,
+        "airborne_percentage": ap,
     }
     return PlayerStatsSnapshot("m", pid, name, team, is_user, stats)
 
@@ -130,6 +137,55 @@ class GoalInsightTests(unittest.TestCase):
         self.assertIsNotNone(msg)
         assert msg is not None
         self.assertTrue(msg.startswith("Your "))
+
+    def test_skips_airborne_when_opponent_has_no_ground_time(self) -> None:
+        """Other cars often lack on-ground in Bakkes/RL plugin; bogus 100% airborne must not drive insights."""
+        players = (
+            _p(
+                "1",
+                "Me",
+                0,
+                is_user=True,
+                time_on_ground=100.0,
+                time_airborne=25.0,
+            ),
+            _p(
+                "2",
+                "Opp",
+                1,
+                time_on_ground=0.0,
+                time_airborne=200.0,
+                airborne_percentage=100.0,
+            ),
+        )
+        msg = compute_goal_insight(players, 30.0, insight_salt=0)
+        self.assertIsNotNone(msg)
+        assert msg is not None
+        self.assertNotIn("airborne", msg.lower())
+
+    def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
+        players = (
+            _p(
+                "1",
+                "Me",
+                0,
+                is_user=True,
+                time_on_ground=100.0,
+                time_airborne=10.0,
+            ),
+            _p(
+                "2",
+                "Opp",
+                1,
+                time_on_ground=50.0,
+                time_airborne=150.0,
+                airborne_percentage=75.0,
+            ),
+        )
+        msg = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(msg)
+        assert msg is not None
+        self.assertIn("airborne", msg.lower())
 
 
 if __name__ == "__main__":
