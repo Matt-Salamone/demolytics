@@ -214,7 +214,7 @@ class DemolyticsApp(ctk.CTk):
         self.glance_goal_insight_label = ctk.CTkLabel(
             insight_wrap,
             text=(
-                "After each goal, a standout lobby or team stat appears here "
+                "After each goal, a quick read on your stats compared to the lobby appears here "
                 "(needs a few seconds of match time on the clock)."
             ),
             font=ctk.CTkFont(size=15),
@@ -539,7 +539,7 @@ class DemolyticsApp(ctk.CTk):
             else:
                 self.glance_goal_insight_label.configure(
                     text=(
-                        "After each goal, a standout lobby or team stat appears here "
+                        "After each goal, a quick read on your stats compared to the lobby appears here "
                         "(needs a few seconds of match time on the clock)."
                     ),
                     text_color=("gray30", "gray80"),
@@ -577,9 +577,7 @@ class DemolyticsApp(ctk.CTk):
                 if total == 0:
                     lines.append(f"{name}  —  no prior matches recorded")
                 else:
-                    lines.append(
-                        f"{name}  —  {total} prior games (teammate {teammate}, opponent {opponent})"
-                    )
+                    lines.append(f"{name}  —  {total} prior matches")
             self._lobby_encounter_cache_ids = ids
             self._lobby_encounter_cache_lines = list(lines)
             signature = f"live:{','.join(ids)}"
@@ -728,10 +726,14 @@ class DemolyticsApp(ctk.CTk):
             row = ctk.CTkFrame(self.encounters_frame)
             row.grid(row=index, column=0, sticky="ew", padx=4, pady=4)
             row.grid_columnconfigure(0, weight=1)
+            tw = int(encounter["teammate_wins"])
+            tl = int(encounter["teammate_losses"])
+            ow = int(encounter["opponent_wins"])
+            ol = int(encounter["opponent_losses"])
             text = (
                 f"{encounter['player_name']}  |  "
-                f"Teammate: {encounter['teammate_games']}  |  "
-                f"Opponent: {encounter['opponent_games']}"
+                f"Teammate {tw}-{tl}  |  "
+                f"Opponent {ow}-{ol}"
             )
             ctk.CTkLabel(row, text=text, anchor="w").grid(row=0, column=0, sticky="ew", padx=8, pady=8)
             self.encounter_rows.append(row)

@@ -58,20 +58,60 @@ class RepositoryTests(unittest.TestCase):
                     ),
                 )
             )
+            repository.save_completed_match(
+                CompletedMatch(
+                    match_guid="M2",
+                    session_id="S1",
+                    timestamp=datetime(2026, 1, 1, 0, 10, tzinfo=UTC),
+                    game_mode="2v2",
+                    user_result="Loss",
+                    duration_seconds=300,
+                    players=(
+                        PlayerStatsSnapshot(
+                            match_guid="M2",
+                            primary_id="Steam|111|0",
+                            player_name="User",
+                            team_num=0,
+                            is_user=True,
+                            stats={"score": 100, "goals": 0, "shots": 1, "avg_boost": 45},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M2",
+                            primary_id="Steam|222|0",
+                            player_name="Mate",
+                            team_num=0,
+                            is_user=False,
+                            stats={"score": 200, "goals": 1, "shots": 2, "avg_boost": 42},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid="M2",
+                            primary_id="Epic|333|0",
+                            player_name="Opponent",
+                            team_num=1,
+                            is_user=False,
+                            stats={"score": 400, "goals": 2, "shots": 4, "avg_boost": 55},
+                        ),
+                    ),
+                )
+            )
 
             matches = repository.list_matches()
             user_averages = repository.get_user_averages(game_mode="2v2")
             baseline = repository.get_global_baseline(game_mode="2v2")
             encounters = repository.list_encounters()
 
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(user_averages["score"], 500)
-        self.assertEqual(baseline["goals"], 1)
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(user_averages["score"], 300)
+        self.assertAlmostEqual(baseline["goals"], 1.25)
         self.assertEqual(len(encounters), 2)
         teammate = next(row for row in encounters if row["player_name"] == "Mate")
         opponent = next(row for row in encounters if row["player_name"] == "Opponent")
-        self.assertEqual(teammate["teammate_games"], 1)
-        self.assertEqual(opponent["opponent_games"], 1)
+        self.assertEqual(teammate["teammate_games"], 2)
+        self.assertEqual(int(teammate["teammate_wins"]), 1)
+        self.assertEqual(int(teammate["teammate_losses"]), 1)
+        self.assertEqual(opponent["opponent_games"], 2)
+        self.assertEqual(int(opponent["opponent_wins"]), 1)
+        self.assertEqual(int(opponent["opponent_losses"]), 1)
 
     def test_get_encounters_for_primary_ids_subset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -125,6 +165,8 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn("Steam|222|0", by_id)
             self.assertEqual(int(by_id["Steam|222|0"]["teammate_games"]), 1)
             self.assertEqual(int(by_id["Steam|222|0"]["opponent_games"]), 0)
+            self.assertEqual(int(by_id["Steam|222|0"]["teammate_wins"]), 1)
+            self.assertEqual(int(by_id["Steam|222|0"]["teammate_losses"]), 0)
             self.assertNotIn("Epic|999|0", by_id)
 
     def test_clear_all_data_removes_rows(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import zlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -555,8 +556,6 @@ class DemolyticsAggregator:
             tn for tn, sc in new_team_scores.items() if sc > self._prev_team_scores.get(tn, 0)
         ]
         goal_team = scoring_teams[0] if len(scoring_teams) == 1 else None
-        pre_goals_from_event = {p.primary_id: p.goals for p in event.players if p.primary_id}
-
         self._sync_kickoff_pause_latch(event.game)
         freeplay = is_freeplay(event.players)
         if (
@@ -599,38 +598,17 @@ class DemolyticsAggregator:
             and not freeplay
             and self.current_match.multiplayer_seen
         ):
-            candidates = [
-                pid
-                for pid, g in pre_goals_from_event.items()
-                if g > self._prev_player_goals.get(pid, 0)
-            ]
-            scorer_id: str | None = None
-            if len(candidates) == 1:
-                only = candidates[0]
-                acc = self.current_match.players.get(only)
-                if acc is not None and acc.team_num == goal_team:
-                    scorer_id = only
-            elif len(candidates) > 1:
-                on_team = [
-                    pid
-                    for pid in candidates
-                    if (p := self.current_match.players.get(pid)) is not None and p.team_num == goal_team
-                ]
-                if len(on_team) == 1:
-                    scorer_id = on_team[0]
-
             live_players = self.current_match.snapshots(self.user_primary_id)
-            live_teams = self.current_match.team_snapshots(self.user_primary_id)
             stat_seconds = self.current_match.duration_seconds
             if event.game.elapsed is not None:
                 stat_seconds = max(stat_seconds, float(event.game.elapsed))
+            insight_salt = zlib.adler32(
+                f"{self.current_match.match_guid}|{sum(new_team_scores.values())}".encode()
+            )
             msg = compute_goal_insight(
-                goal_team,
                 live_players,
-                live_teams,
                 stat_seconds,
-                scorer_id,
-                user_team_num=self._user_team_num(),
+                insight_salt=insight_salt,
             )
             if msg is not None:
                 self._goal_insight = msg

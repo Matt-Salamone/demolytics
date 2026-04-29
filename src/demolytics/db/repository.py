@@ -218,11 +218,28 @@ class DemolyticsRepository:
                         MAX(p.player_name) AS player_name,
                         SUM(CASE WHEN p.team_num = u.team_num THEN 1 ELSE 0 END) AS teammate_games,
                         SUM(CASE WHEN p.team_num != u.team_num THEN 1 ELSE 0 END) AS opponent_games,
+                        SUM(
+                            CASE WHEN p.team_num = u.team_num AND m.user_result = 'Win'
+                            THEN 1 ELSE 0 END
+                        ) AS teammate_wins,
+                        SUM(
+                            CASE WHEN p.team_num = u.team_num AND m.user_result = 'Loss'
+                            THEN 1 ELSE 0 END
+                        ) AS teammate_losses,
+                        SUM(
+                            CASE WHEN p.team_num != u.team_num AND m.user_result = 'Win'
+                            THEN 1 ELSE 0 END
+                        ) AS opponent_wins,
+                        SUM(
+                            CASE WHEN p.team_num != u.team_num AND m.user_result = 'Loss'
+                            THEN 1 ELSE 0 END
+                        ) AS opponent_losses,
                         COUNT(*) AS total_games
                     FROM player_match_stats p
                     JOIN player_match_stats u
                         ON u.match_guid = p.match_guid
                         AND u.is_user = 1
+                    JOIN matches m ON m.match_guid = p.match_guid
                     WHERE p.is_user = 0
                     GROUP BY p.primary_id
                     ORDER BY total_games DESC, player_name ASC
@@ -233,7 +250,7 @@ class DemolyticsRepository:
             )
 
     def get_encounters_for_primary_ids(self, primary_ids: Iterable[str]) -> dict[str, sqlite3.Row]:
-        """Encounter counts (teammate / opponent vs saved user) for the given platform IDs."""
+        """Encounter counts and W/L as teammate vs opponent (from saved user_result) per platform ID."""
         ids = tuple({pid for pid in primary_ids if pid})
         if not ids:
             return {}
@@ -246,11 +263,28 @@ class DemolyticsRepository:
                     MAX(p.player_name) AS player_name,
                     SUM(CASE WHEN p.team_num = u.team_num THEN 1 ELSE 0 END) AS teammate_games,
                     SUM(CASE WHEN p.team_num != u.team_num THEN 1 ELSE 0 END) AS opponent_games,
+                    SUM(
+                        CASE WHEN p.team_num = u.team_num AND m.user_result = 'Win'
+                        THEN 1 ELSE 0 END
+                    ) AS teammate_wins,
+                    SUM(
+                        CASE WHEN p.team_num = u.team_num AND m.user_result = 'Loss'
+                        THEN 1 ELSE 0 END
+                    ) AS teammate_losses,
+                    SUM(
+                        CASE WHEN p.team_num != u.team_num AND m.user_result = 'Win'
+                        THEN 1 ELSE 0 END
+                    ) AS opponent_wins,
+                    SUM(
+                        CASE WHEN p.team_num != u.team_num AND m.user_result = 'Loss'
+                        THEN 1 ELSE 0 END
+                    ) AS opponent_losses,
                     COUNT(*) AS total_games
                 FROM player_match_stats p
                 JOIN player_match_stats u
                     ON u.match_guid = p.match_guid
                     AND u.is_user = 1
+                JOIN matches m ON m.match_guid = p.match_guid
                 WHERE p.is_user = 0 AND p.primary_id IN ({placeholders})
                 GROUP BY p.primary_id
                 """,
