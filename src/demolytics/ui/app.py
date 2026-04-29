@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import logging
+import threading
+import time
+import webbrowser
+from datetime import datetime
 from queue import Queue
 from tkinter import BooleanVar, StringVar, messagebox
 from typing import Any
@@ -17,7 +22,7 @@ from demolytics.domain.aggregator import (
     DemolyticsAggregator,
     PlayerStatsSnapshot,
 )
-from demolytics.domain.events import StatsEvent
+from demolytics.domain.events import MatchLifecycleEvent, StatsEvent
 from demolytics.domain.stats import (
     DEFAULT_STATS_TAB_VISIBLE,
     GLANCE_STAT_KEYS,
@@ -28,6 +33,7 @@ from demolytics.domain.stats import (
     team_stat_suffix,
 )
 from demolytics.settings import (
+    BALLCHASING_VISIBILITY_CHOICES,
     AppSettings,
     DEFAULT_GLANCE_STATS,
     SETTINGS_FORMAT_VERSION,
@@ -37,6 +43,8 @@ from demolytics.settings import (
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_playlist_mode(mode: str) -> str:
@@ -91,6 +99,10 @@ class DemolyticsApp(ctk.CTk):
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
         self._comparison_mode_var = StringVar(value=_normalize_playlist_mode(settings.comparison_game_mode))
+        self._replay_created_stash: dict[str, dict[str, Any]] = {}
+        self._ballchasing_queue: Queue[dict[str, Any]] = Queue()
+        self._ballchasing_worker_thread: threading.Thread | None = None
+        self._snackbar_after_id: str | None = None
 
         self.title("Demolytics")
         self.geometry("1180x760")
@@ -192,6 +204,59 @@ class DemolyticsApp(ctk.CTk):
         self._build_history_tab()
         self._build_encounters_tab()
         self._refresh_all_views()
+
+        self._snackbar_frame = ctk.CTkFrame(self, corner_radius=10)
+        self._snackbar_frame.grid_columnconfigure(0, weight=1)
+        self._snackbar_label = ctk.CTkLabel(
+            self._snackbar_frame,
+            text="",
+            font=ctk.CTkFont(size=14),
+            wraplength=920,
+            justify="center",
+        )
+        self._snackbar_label.grid(row=0, column=0, padx=20, pady=12, sticky="ew")
+        self._snackbar_frame.grid_remove()
+
+    def _show_snackbar(self, message: str, *, success: bool) -> None:
+        frame = getattr(self, "_snackbar_frame", None)
+        label = getattr(self, "_snackbar_label", None)
+        if frame is None or label is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                return
+        except Exception:
+            return
+
+        prev = self._snackbar_after_id
+        if prev is not None:
+            try:
+                self.after_cancel(prev)
+            except Exception:
+                pass
+            self._snackbar_after_id = None
+
+        label.configure(text=message)
+        if success:
+            frame.configure(fg_color=("#14532d", "#166534"))
+            label.configure(text_color=("#ecfdf5", "#ecfdf5"))
+        else:
+            frame.configure(fg_color=("#7f1d1d", "#991b1b"))
+            label.configure(text_color=("#fef2f2", "#fef2f2"))
+
+        frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
+        self._snackbar_after_id = self.after(5500, self._hide_snackbar)
+
+    def _hide_snackbar(self) -> None:
+        self._snackbar_after_id = None
+        frame = getattr(self, "_snackbar_frame", None)
+        if frame is None:
+            return
+        try:
+            if frame.winfo_exists():
+                frame.grid_remove()
+        except Exception:
+            pass
 
     def _build_glance_dashboard_tab(self) -> None:
         self.glance_tab.grid_columnconfigure(0, weight=1)
@@ -484,6 +549,91 @@ class DemolyticsApp(ctk.CTk):
         self.api_thread = StatsApiThread(client, self.event_queue)
         self.api_thread.start()
 
+    def _ensure_ballchasing_worker(self) -> None:
+        if self._ballchasing_worker_thread is not None and self._ballchasing_worker_thread.is_alive():
+            return
+        self._ballchasing_worker_thread = threading.Thread(
+            target=self._ballchasing_worker_loop,
+            daemon=True,
+            name="BallchasingUpload",
+        )
+        self._ballchasing_worker_thread.start()
+
+    def _maybe_enqueue_ballchasing_upload(
+        self,
+        *,
+        replay_data: dict[str, Any] | None,
+        match_end: datetime,
+    ) -> None:
+        if not self.settings.ballchasing_auto_upload:
+            return
+        token = self.settings.ballchasing_token.strip()
+        if not token:
+            LOGGER.debug("Ballchasing auto-upload is enabled but no API token is set; skipping upload.")
+            return
+        self._ensure_ballchasing_worker()
+        self._ballchasing_queue.put(
+            {
+                "delay_seconds": 4.0,
+                "replay_data": dict(replay_data) if replay_data else None,
+                "match_end": match_end,
+                "token": token,
+                "visibility": self.settings.ballchasing_visibility,
+            }
+        )
+
+    def _ballchasing_worker_loop(self) -> None:
+        from demolytics.integrations.ballchasing import BallchasingUploadError, upload_replay_file
+        from demolytics.integrations.replay_path import resolve_replay_path
+
+        while True:
+            job = self._ballchasing_queue.get()
+            try:
+                time.sleep(float(job["delay_seconds"]))
+                replay_path = resolve_replay_path(
+                    job.get("replay_data"),
+                    job["match_end"],
+                )
+                if replay_path is None:
+                    LOGGER.debug("Ballchasing: could not resolve a replay file for upload.")
+                    self.after(
+                        0,
+                        lambda: self._show_snackbar(
+                            "Could not find a replay file to upload to Ballchasing.",
+                            success=False,
+                        ),
+                    )
+                    continue
+                upload_replay_file(replay_path, job["token"], job["visibility"])
+                LOGGER.info("Uploaded replay to Ballchasing: %s", replay_path.name)
+                name = replay_path.name
+                self.after(
+                    0,
+                    lambda n=name: self._show_snackbar(
+                        f"Replay uploaded to Ballchasing: {n}",
+                        success=True,
+                    ),
+                )
+            except BallchasingUploadError as exc:
+                LOGGER.warning("Ballchasing upload failed: %s", exc)
+                msg = str(exc)
+                self.after(
+                    0,
+                    lambda m=msg: self._show_snackbar(f"Ballchasing upload failed: {m}", success=False),
+                )
+            except Exception as exc:
+                LOGGER.exception("Ballchasing upload raised unexpectedly")
+                msg = str(exc)
+                self.after(
+                    0,
+                    lambda m=msg: self._show_snackbar(
+                        f"Ballchasing upload failed: {m}",
+                        success=False,
+                    ),
+                )
+            finally:
+                self._ballchasing_queue.task_done()
+
     def _poll_queues(self) -> None:
         if self.api_thread is not None:
             for status in drain_queue(self.api_thread.status_queue):
@@ -491,6 +641,8 @@ class DemolyticsApp(ctk.CTk):
 
         changed = False
         for event in drain_queue(self.event_queue):
+            if isinstance(event, MatchLifecycleEvent) and event.event_name == "ReplayCreated" and event.match_guid:
+                self._replay_created_stash[event.match_guid] = dict(event.data)
             result = self.aggregator.handle_event(event)
             self.snapshot = result.snapshot
             if self.snapshot.session:
@@ -499,6 +651,11 @@ class DemolyticsApp(ctk.CTk):
                 self.repository.save_completed_match(result.completed_match)
                 self._refresh_history()
                 self._refresh_encounters()
+                replay_snapshot = self._replay_created_stash.pop(result.completed_match.match_guid, None)
+                self._maybe_enqueue_ballchasing_upload(
+                    replay_data=replay_snapshot,
+                    match_end=result.completed_match.timestamp,
+                )
             changed = True
 
         if changed:
@@ -780,7 +937,7 @@ class DemolyticsApp(ctk.CTk):
     def _open_settings(self) -> None:
         modal = ctk.CTkToplevel(self)
         modal.title("Settings")
-        modal.geometry("520x700")
+        modal.geometry("540x760")
         modal.grab_set()
 
         body = ctk.CTkFrame(modal, fg_color="transparent")
@@ -864,6 +1021,72 @@ class DemolyticsApp(ctk.CTk):
             checkbox.pack(anchor="w", padx=8, pady=3)
             variables[stat.key] = variable
 
+        integrations_tab = tabview.add("Ballchasing")
+        int_scroll = ctk.CTkScrollableFrame(integrations_tab)
+        int_scroll.pack(fill="both", expand=True)
+        int_scroll.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            int_scroll,
+            text=(
+                "Create an API token on ballchasing.com (see link below), then paste it here. "
+                "Your token is stored only in your local Demolytics settings file on this PC."
+            ),
+            wraplength=440,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+
+        doc_link = ctk.CTkLabel(
+            int_scroll,
+            text="Open Ballchasing API documentation (authentication / token)",
+            text_color=("#2563eb", "#60a5fa"),
+            cursor="hand2",
+            anchor="w",
+        )
+        doc_link.pack(anchor="w", padx=8, pady=(0, 12))
+        doc_link.bind(
+            "<Button-1>",
+            lambda _e: webbrowser.open("https://ballchasing.com/doc/api"),
+        )
+
+        ballchasing_auto_var = BooleanVar(value=self.settings.ballchasing_auto_upload)
+        ctk.CTkCheckBox(
+            int_scroll,
+            text="Automatically upload replays to ballchasing.com after online matches",
+            variable=ballchasing_auto_var,
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        ctk.CTkLabel(int_scroll, text="API token", anchor="w").pack(anchor="w", padx=8, pady=(4, 2))
+        token_entry = ctk.CTkEntry(
+            int_scroll,
+            width=420,
+            show="*",
+            placeholder_text="Paste token from ballchasing.com",
+        )
+        token_entry.pack(anchor="w", padx=8, pady=(0, 8))
+        if self.settings.ballchasing_token:
+            token_entry.insert(0, self.settings.ballchasing_token)
+
+        ctk.CTkLabel(int_scroll, text="Replay visibility", anchor="w").pack(anchor="w", padx=8, pady=(4, 2))
+        visibility_combo = ctk.CTkComboBox(
+            int_scroll,
+            values=list(BALLCHASING_VISIBILITY_CHOICES),
+            width=200,
+        )
+        visibility_combo.set(self.settings.ballchasing_visibility)
+        visibility_combo.pack(anchor="w", padx=8, pady=(0, 8))
+
+        ctk.CTkLabel(
+            int_scroll,
+            text="When auto-upload is on, paste a token above or uploads will be skipped.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray35", "gray70"),
+            anchor="w",
+            wraplength=440,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(8, 0))
+
         data_tab = tabview.add("Data")
         data_inner = ctk.CTkFrame(data_tab, fg_color="transparent")
         data_inner.pack(fill="both", expand=True, padx=8, pady=8)
@@ -895,6 +1118,12 @@ class DemolyticsApp(ctk.CTk):
             ]
             if not self.settings.visible_stats:
                 self.settings.visible_stats = list(DEFAULT_STATS_TAB_VISIBLE)
+            self.settings.ballchasing_auto_upload = bool(ballchasing_auto_var.get())
+            self.settings.ballchasing_token = token_entry.get().strip()
+            vis = (visibility_combo.get() or "private").lower().strip()
+            self.settings.ballchasing_visibility = (
+                vis if vis in BALLCHASING_VISIBILITY_CHOICES else "private"
+            )
             self.settings.settings_format_version = SETTINGS_FORMAT_VERSION
             save_settings(self.settings)
             modal.destroy()
@@ -978,6 +1207,12 @@ class DemolyticsApp(ctk.CTk):
             child.destroy()
 
     def _on_close(self) -> None:
+        if self._snackbar_after_id is not None:
+            try:
+                self.after_cancel(self._snackbar_after_id)
+            except Exception:
+                pass
+            self._snackbar_after_id = None
         if self.api_thread is not None:
             self.api_thread.stop()
         self.destroy()

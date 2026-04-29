@@ -4,7 +4,13 @@ import json
 import unittest
 from pathlib import Path
 
-from demolytics.domain.events import MatchEndedEvent, StatfeedEvent, UpdateStateEvent, parse_message
+from demolytics.domain.events import (
+    MatchEndedEvent,
+    MatchLifecycleEvent,
+    StatfeedEvent,
+    UpdateStateEvent,
+    parse_message,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -83,6 +89,22 @@ class EventParsingTests(unittest.TestCase):
         assert isinstance(event, StatfeedEvent)
         self.assertEqual(event.stat_type, "Demolition")
         self.assertEqual(event.secondary_target.name, "B")
+
+    def test_parse_replay_created_preserves_data(self) -> None:
+        payload = {
+            "Event": "ReplayCreated",
+            "Data": {
+                "MatchGuid": "MG-REPLAY",
+                "ReplayName": "MyReplay",
+                "Extra": 1,
+            },
+        }
+        event = parse_message(json.dumps(payload))
+        self.assertIsInstance(event, MatchLifecycleEvent)
+        assert isinstance(event, MatchLifecycleEvent)
+        self.assertEqual(event.match_guid, "MG-REPLAY")
+        self.assertEqual(event.data.get("ReplayName"), "MyReplay")
+        self.assertEqual(event.data.get("Extra"), 1)
 
 
 if __name__ == "__main__":

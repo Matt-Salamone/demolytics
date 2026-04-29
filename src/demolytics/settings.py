@@ -30,6 +30,8 @@ SETTINGS_FORMAT_VERSION = 2
 
 STANDARD_PLAYLIST_MODES: tuple[str, ...] = ("1v1", "2v2", "3v3")
 
+BALLCHASING_VISIBILITY_CHOICES: tuple[str, ...] = ("public", "unlisted", "private")
+
 
 @dataclass
 class AppSettings:
@@ -40,6 +42,9 @@ class AppSettings:
     settings_format_version: int = SETTINGS_FORMAT_VERSION
     database_path: str | None = None
     install_dir: str | None = None
+    ballchasing_auto_upload: bool = True
+    ballchasing_token: str = ""
+    ballchasing_visibility: str = "private"
 
 
 def get_app_data_dir() -> Path:
@@ -108,6 +113,12 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if comparison_game_mode not in STANDARD_PLAYLIST_MODES:
         comparison_game_mode = "1v1"
 
+    ballchasing_auto_upload = bool(raw.get("ballchasing_auto_upload", True))
+    ballchasing_token = str(raw.get("ballchasing_token", "")).strip()
+    ballchasing_visibility = str(raw.get("ballchasing_visibility", "private")).lower()
+    if ballchasing_visibility not in BALLCHASING_VISIBILITY_CHOICES:
+        ballchasing_visibility = "private"
+
     return {
         "websocket_port": int(raw.get("websocket_port", DEFAULT_PORT)),
         "visible_stats": visible_stats,
@@ -116,4 +127,7 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
         "settings_format_version": fmt_version,
         "database_path": raw.get("database_path"),
         "install_dir": raw.get("install_dir"),
+        "ballchasing_auto_upload": ballchasing_auto_upload,
+        "ballchasing_token": ballchasing_token,
+        "ballchasing_visibility": ballchasing_visibility,
     }

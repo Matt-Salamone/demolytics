@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -72,6 +72,7 @@ class UpdateStateEvent:
 class MatchLifecycleEvent:
     event_name: str
     match_guid: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ def parse_message(raw: str | bytes | dict[str, Any]) -> StatsEvent:
         return MatchLifecycleEvent(
             event_name=event_name,
             match_guid=str(data.get("MatchGuid", "")),
+            data=dict(data),
         )
     return GenericEvent(
         event_name=event_name,
