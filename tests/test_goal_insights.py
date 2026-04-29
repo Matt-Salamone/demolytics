@@ -54,18 +54,18 @@ def _p(
 class GoalInsightTests(unittest.TestCase):
     def test_returns_none_when_duration_below_floor(self) -> None:
         players = (_p("1", "A", 0, is_user=True), _p("2", "B", 1))
-        msg = compute_goal_insight(players, MIN_LOBBY_SECONDS - 1.0)
-        self.assertIsNone(msg)
+        result = compute_goal_insight(players, MIN_LOBBY_SECONDS - 1.0)
+        self.assertIsNone(result)
 
     def test_returns_none_with_single_player_lobby(self) -> None:
         players = (_p("1", "A", 0, is_user=True),)
-        msg = compute_goal_insight(players, 60.0)
-        self.assertIsNone(msg)
+        result = compute_goal_insight(players, 60.0)
+        self.assertIsNone(result)
 
     def test_returns_none_when_user_not_identified(self) -> None:
         players = (_p("1", "A", 0), _p("2", "B", 1))
-        msg = compute_goal_insight(players, 30.0)
-        self.assertIsNone(msg)
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNone(result)
 
     def test_user_time_zero_boost_outlier_vs_teammate(self) -> None:
         players = (
@@ -74,9 +74,10 @@ class GoalInsightTests(unittest.TestCase):
             _p("3", "Quiet3", 1, time_zero_boost=10.0),
             _p("4", "Hungry", 1, time_zero_boost=40.0, is_user=True),
         )
-        msg = compute_goal_insight(players, 20.0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
+        result = compute_goal_insight(players, 20.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        msg = result.message
         self.assertIn("You", msg)
         self.assertNotIn("Hungry", msg)
         self.assertIn("0 boost", msg.lower())
@@ -87,9 +88,10 @@ class GoalInsightTests(unittest.TestCase):
             _p("2", "B", 0, avg_boost=50.0),
             _p("3", "Me", 0, avg_boost=30.0, is_user=True),
         )
-        msg = compute_goal_insight(players, 30.0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        msg = result.message
         self.assertIn("You", msg)
         self.assertIn("average boost", msg.lower())
 
@@ -101,19 +103,20 @@ class GoalInsightTests(unittest.TestCase):
             _p("3", "C", 1, time_zero_boost=10.0),
             _p("4", "D", 1, time_zero_boost=40.0, is_user=True),
         )
-        msg = compute_goal_insight(players, 3.0)
-        self.assertIsNone(msg)
-        msg_ok = compute_goal_insight(players, 5.0)
-        self.assertIsNotNone(msg_ok)
+        result = compute_goal_insight(players, 3.0)
+        self.assertIsNone(result)
+        result_ok = compute_goal_insight(players, 5.0)
+        self.assertIsNotNone(result_ok)
 
     def test_1v1_user_demo_below_opponent(self) -> None:
         players = (
             _p("1", "SoloA", 0, demos_inflicted=1.0, is_user=True),
             _p("2", "SoloB", 1, demos_inflicted=6.0),
         )
-        msg = compute_goal_insight(players, 20.0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
+        result = compute_goal_insight(players, 20.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        msg = result.message
         self.assertIn("You", msg)
         self.assertIn("opponent", msg.lower())
 
@@ -122,9 +125,10 @@ class GoalInsightTests(unittest.TestCase):
             _p("1", "A", 0, demos_inflicted=9.0, is_user=True),
             _p("2", "B", 1, demos_inflicted=1.0),
         )
-        msg = compute_goal_insight(players, 30.0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        msg = result.message
         self.assertIn("demos inflicted", msg.lower())
 
     def test_fallback_when_no_outlier(self) -> None:
@@ -133,10 +137,10 @@ class GoalInsightTests(unittest.TestCase):
             _p("2", "B", 0),
             _p("3", "Me", 0, is_user=True),
         )
-        msg = compute_goal_insight(players, 30.0, insight_salt=0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
-        self.assertTrue(msg.startswith("Your "))
+        result = compute_goal_insight(players, 30.0, insight_salt=0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result.message.startswith("Your "))
 
     def test_skips_airborne_when_opponent_has_no_ground_time(self) -> None:
         """Other cars often lack on-ground in Bakkes/RL plugin; bogus 100% airborne must not drive insights."""
@@ -158,10 +162,10 @@ class GoalInsightTests(unittest.TestCase):
                 airborne_percentage=100.0,
             ),
         )
-        msg = compute_goal_insight(players, 30.0, insight_salt=0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
-        self.assertNotIn("airborne", msg.lower())
+        result = compute_goal_insight(players, 30.0, insight_salt=0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertNotIn("airborne", result.message.lower())
 
     def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
         players = (
@@ -182,10 +186,10 @@ class GoalInsightTests(unittest.TestCase):
                 airborne_percentage=75.0,
             ),
         )
-        msg = compute_goal_insight(players, 30.0)
-        self.assertIsNotNone(msg)
-        assert msg is not None
-        self.assertIn("airborne", msg.lower())
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("airborne", result.message.lower())
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from dataclasses import dataclass
+from typing import Callable, Literal, Protocol
 
 from demolytics.domain.stats import STAT_LABELS
 
@@ -20,6 +21,20 @@ _FALLBACK_STAT_KEYS = (
     "demos_taken",
     "airborne_percentage",
 )
+
+
+@dataclass(frozen=True)
+class GoalInsightResult:
+    """Structured outcome of after-goal insight selection (for UI + analytics)."""
+
+    message: str
+    stat_key: str
+    kind: Literal["outlier", "fallback"]
+    peer_group: Literal["teammates", "opponents"]
+    user_value: float
+    peer_median: float
+    ratio: float | None
+    outlier_direction: Literal["user_above_peer", "user_below_peer"] | None
 
 
 class _PlayerStatsLike(Protocol):
@@ -49,7 +64,7 @@ def compute_goal_insight(
     match_duration_seconds: float,
     *,
     insight_salt: int = 0,
-) -> str | None:
+) -> GoalInsightResult | None:
     distinct = {p.primary_id for p in players if p.primary_id}
     if len(distinct) < 2:
         return None
@@ -67,20 +82,48 @@ def compute_goal_insight(
 
     best_ratio = 0.0
     best_message: str | None = None
+    best_stat_key: str | None = None
+    best_uv = 0.0
+    best_med = 0.0
+    best_direction: Literal["user_above_peer", "user_below_peer"] | None = None
+    best_peer_group: Literal["teammates", "opponents"] | None = None
 
-    def consider(ratio: float, message: str) -> None:
-        nonlocal best_ratio, best_message
+    def consider(
+        ratio: float,
+        message: str,
+        *,
+        stat_key: str,
+        uv: float,
+        med: float,
+        direction: Literal["user_above_peer", "user_below_peer"],
+        peer_group: Literal["teammates", "opponents"],
+    ) -> None:
+        nonlocal best_ratio, best_message, best_stat_key, best_uv, best_med, best_direction, best_peer_group
         if ratio > best_ratio and ratio >= OUTLIER_RATIO:
             best_ratio = ratio
             best_message = message
+            best_stat_key = stat_key
+            best_uv = uv
+            best_med = med
+            best_direction = direction
+            best_peer_group = peer_group
 
     if teammates:
-        _user_vs_peer_median_outliers(user, teammates, consider, same_team=True)
+        _user_vs_peer_median_outliers(user, teammates, consider, peer_group="teammates")
     elif opponents:
-        _user_vs_peer_median_outliers(user, opponents, consider, same_team=False)
+        _user_vs_peer_median_outliers(user, opponents, consider, peer_group="opponents")
 
-    if best_message is not None:
-        return best_message
+    if best_message is not None and best_stat_key is not None and best_peer_group is not None:
+        return GoalInsightResult(
+            message=best_message,
+            stat_key=best_stat_key,
+            kind="outlier",
+            peer_group=best_peer_group,
+            user_value=best_uv,
+            peer_median=best_med,
+            ratio=best_ratio,
+            outlier_direction=best_direction,
+        )
 
     return _fallback_user_insight(user, teammates, opponents, insight_salt)
 
@@ -111,10 +154,11 @@ def _peer_high_phrase(same_team: bool, num_peers: int) -> str:
 def _user_vs_peer_median_outliers(
     user: _PlayerStatsLike,
     peers: tuple[_PlayerStatsLike, ...],
-    consider: Callable[[float, str], None],
+    consider: Callable[..., None],
     *,
-    same_team: bool,
+    peer_group: Literal["teammates", "opponents"],
 ) -> None:
+    same_team = peer_group == "teammates"
     peer_phrase = _peer_high_phrase(same_team, len(peers))
 
     for stat_key, higher_is_notable in (
@@ -138,12 +182,22 @@ def _user_vs_peer_median_outliers(
                     uv / med,
                     f"You have much more {label} than {peer_phrase} so far "
                     f"({_fmt(stat_key, uv)} vs {ref}).",
+                    stat_key=stat_key,
+                    uv=uv,
+                    med=med,
+                    direction="user_above_peer",
+                    peer_group=peer_group,
                 )
             elif med / max(uv, 1e-6) >= OUTLIER_RATIO:
                 consider(
                     med / max(uv, 1e-6),
                     f"Your {label} is well below {peer_phrase} "
                     f"({_fmt(stat_key, uv)} vs {ref}).",
+                    stat_key=stat_key,
+                    uv=uv,
+                    med=med,
+                    direction="user_below_peer",
+                    peer_group=peer_group,
                 )
 
     stat_key = "avg_boost"
@@ -158,6 +212,11 @@ def _user_vs_peer_median_outliers(
                 med / max(uv, 1e-6),
                 f"Your {label} is well below {peer_phrase} "
                 f"({_fmt(stat_key, uv)} vs {ref}).",
+                stat_key=stat_key,
+                uv=uv,
+                med=med,
+                direction="user_below_peer",
+                peer_group=peer_group,
             )
 
     stat_key = "shooting_percentage"
@@ -172,6 +231,11 @@ def _user_vs_peer_median_outliers(
                 uv / max(med, 1e-6),
                 f"Your {label} is far above {peer_phrase} "
                 f"({_fmt(stat_key, uv)} vs {ref}).",
+                stat_key=stat_key,
+                uv=uv,
+                med=med,
+                direction="user_above_peer",
+                peer_group=peer_group,
             )
 
 
@@ -180,13 +244,15 @@ def _fallback_user_insight(
     teammates: tuple[_PlayerStatsLike, ...],
     opponents: tuple[_PlayerStatsLike, ...],
     insight_salt: int,
-) -> str | None:
+) -> GoalInsightResult | None:
     if teammates:
         peers = teammates
         peer_label = "teammates"
+        peer_group: Literal["teammates", "opponents"] = "teammates"
     elif opponents:
         peers = opponents
         peer_label = "opponent" if len(opponents) == 1 else "the other team"
+        peer_group = "opponents"
     else:
         return None
 
@@ -206,18 +272,29 @@ def _fallback_user_insight(
                 f"median {_fmt(stat_key, med)}" if len(peers) > 1 else f"their {_fmt(stat_key, med)}"
             )
             who = "teammates'" if len(peers) > 1 else "teammate's"
-            return (
+            msg = (
                 f"Your {label.lower()} ({_fmt(stat_key, uv)}) is close to your {who} "
                 f"typical level ({med_note})."
             )
-        if peer_label == "opponent":
-            return (
+        elif peer_label == "opponent":
+            msg = (
                 f"Your {label.lower()} ({_fmt(stat_key, uv)}) is comparable to your opponent's "
                 f"({_fmt(stat_key, med)})."
             )
-        return (
-            f"Your {label.lower()} ({_fmt(stat_key, uv)}) is near the rest of the lobby's "
-            f"typical mark (median {_fmt(stat_key, med)})."
+        else:
+            msg = (
+                f"Your {label.lower()} ({_fmt(stat_key, uv)}) is near the rest of the lobby's "
+                f"typical mark (median {_fmt(stat_key, med)})."
+            )
+        return GoalInsightResult(
+            message=msg,
+            stat_key=stat_key,
+            kind="fallback",
+            peer_group=peer_group,
+            user_value=uv,
+            peer_median=med,
+            ratio=None,
+            outlier_direction=None,
         )
     return None
 
