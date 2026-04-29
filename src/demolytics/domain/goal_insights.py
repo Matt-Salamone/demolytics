@@ -12,6 +12,17 @@ OUTLIER_RATIO = 1.5
 # Rocket League often omits on-ground state for other cars; without ground time, airborne % is meaningless.
 MIN_VISIBLE_GROUND_SECONDS = 0.5
 
+# Snapshot reports 0% shooting when shots==0; that is not comparable to a real percentage.
+MIN_SHOTS_FOR_SHOOTING_COMPARISON = 1
+
+# Opponent cars often lack real Boost in the plugin payload; comparing these vs opponents is misleading.
+BOOST_DERIVED_STAT_KEYS = frozenset(
+    {"avg_boost", "time_zero_boost", "time_full_boost", "time_boosting"}
+)
+
+# Integer stats: ratio-only outliers read as dramatic for ±1 (e.g. 2 vs 1 demos).
+MIN_DEMO_COUNT_GAP_FOR_OUTLIER = 2
+
 # Rotated when no outlier fires; first usable stat wins.
 _FALLBACK_STAT_KEYS = (
     "avg_boost",
@@ -57,6 +68,21 @@ def _airborne_comparison_trustworthy(
     if not _airborne_stat_visible(user):
         return False
     return all(_airborne_stat_visible(p) for p in peers)
+
+
+def _shooting_comparison_trustworthy(
+    user: _PlayerStatsLike, peers: tuple[_PlayerStatsLike, ...]
+) -> bool:
+    """Only compare shooting % when everyone has at least one shot (otherwise RL reports 0%)."""
+    if float(user.stats.get("shots", 0.0)) < MIN_SHOTS_FOR_SHOOTING_COMPARISON:
+        return False
+    return all(float(p.stats.get("shots", 0.0)) >= MIN_SHOTS_FOR_SHOOTING_COMPARISON for p in peers)
+
+
+def _demo_outlier_gap_ok(stat_key: str, uv: float, med: float) -> bool:
+    if stat_key not in ("demos_inflicted", "demos_taken"):
+        return True
+    return abs(int(round(uv)) - int(round(med))) >= MIN_DEMO_COUNT_GAP_FOR_OUTLIER
 
 
 def compute_goal_insight(
@@ -167,6 +193,8 @@ def _user_vs_peer_median_outliers(
         ("demos_taken", True),
         ("airborne_percentage", True),
     ):
+        if peer_group == "opponents" and stat_key in BOOST_DERIVED_STAT_KEYS:
+            continue
         if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, peers):
             continue
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
@@ -177,7 +205,8 @@ def _user_vs_peer_median_outliers(
         uv = float(user.stats.get(stat_key, 0.0))
         ref = _peer_baseline_label(peers, stat_key, med)
         if higher_is_notable:
-            if uv / med >= OUTLIER_RATIO:
+            demo_gap = _demo_outlier_gap_ok(stat_key, uv, med)
+            if uv / med >= OUTLIER_RATIO and demo_gap:
                 consider(
                     uv / med,
                     f"You have much more {label} than {peer_phrase} so far "
@@ -188,7 +217,7 @@ def _user_vs_peer_median_outliers(
                     direction="user_above_peer",
                     peer_group=peer_group,
                 )
-            elif med / max(uv, 1e-6) >= OUTLIER_RATIO:
+            elif med / max(uv, 1e-6) >= OUTLIER_RATIO and demo_gap:
                 consider(
                     med / max(uv, 1e-6),
                     f"Your {label} is well below {peer_phrase} "
@@ -200,43 +229,45 @@ def _user_vs_peer_median_outliers(
                     peer_group=peer_group,
                 )
 
-    stat_key = "avg_boost"
-    values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
-    med = _median(values)
-    if med > 1e-6:
-        label = STAT_LABELS.get(stat_key, stat_key)
-        uv = float(user.stats.get(stat_key, 0.0))
-        ref = _peer_baseline_label(peers, stat_key, med)
-        if uv < med and med / max(uv, 1e-6) >= OUTLIER_RATIO:
-            consider(
-                med / max(uv, 1e-6),
-                f"Your {label} is well below {peer_phrase} "
-                f"({_fmt(stat_key, uv)} vs {ref}).",
-                stat_key=stat_key,
-                uv=uv,
-                med=med,
-                direction="user_below_peer",
-                peer_group=peer_group,
-            )
+    if peer_group != "opponents":
+        stat_key = "avg_boost"
+        values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
+        med = _median(values)
+        if med > 1e-6:
+            label = STAT_LABELS.get(stat_key, stat_key)
+            uv = float(user.stats.get(stat_key, 0.0))
+            ref = _peer_baseline_label(peers, stat_key, med)
+            if uv < med and med / max(uv, 1e-6) >= OUTLIER_RATIO:
+                consider(
+                    med / max(uv, 1e-6),
+                    f"Your {label} is well below {peer_phrase} "
+                    f"({_fmt(stat_key, uv)} vs {ref}).",
+                    stat_key=stat_key,
+                    uv=uv,
+                    med=med,
+                    direction="user_below_peer",
+                    peer_group=peer_group,
+                )
 
     stat_key = "shooting_percentage"
-    values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
-    med = _median(values)
-    if med > 1e-6:
-        label = STAT_LABELS.get(stat_key, stat_key)
-        uv = float(user.stats.get(stat_key, 0.0))
-        ref = _peer_baseline_label(peers, stat_key, med)
-        if uv > med and uv / max(med, 1e-6) >= OUTLIER_RATIO:
-            consider(
-                uv / max(med, 1e-6),
-                f"Your {label} is far above {peer_phrase} "
-                f"({_fmt(stat_key, uv)} vs {ref}).",
-                stat_key=stat_key,
-                uv=uv,
-                med=med,
-                direction="user_above_peer",
-                peer_group=peer_group,
-            )
+    if _shooting_comparison_trustworthy(user, peers):
+        values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
+        med = _median(values)
+        if med > 1e-6:
+            label = STAT_LABELS.get(stat_key, stat_key)
+            uv = float(user.stats.get(stat_key, 0.0))
+            ref = _peer_baseline_label(peers, stat_key, med)
+            if uv > med and uv / max(med, 1e-6) >= OUTLIER_RATIO:
+                consider(
+                    uv / max(med, 1e-6),
+                    f"Your {label} is far above {peer_phrase} "
+                    f"({_fmt(stat_key, uv)} vs {ref}).",
+                    stat_key=stat_key,
+                    uv=uv,
+                    med=med,
+                    direction="user_above_peer",
+                    peer_group=peer_group,
+                )
 
 
 def _fallback_user_insight(
@@ -259,7 +290,11 @@ def _fallback_user_insight(
     start = abs(insight_salt) % len(_FALLBACK_STAT_KEYS)
     for offset in range(len(_FALLBACK_STAT_KEYS)):
         stat_key = _FALLBACK_STAT_KEYS[(start + offset) % len(_FALLBACK_STAT_KEYS)]
+        if peer_group == "opponents" and stat_key in BOOST_DERIVED_STAT_KEYS:
+            continue
         if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, peers):
+            continue
+        if stat_key == "shooting_percentage" and not _shooting_comparison_trustworthy(user, peers):
             continue
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         med = _median(values)

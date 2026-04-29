@@ -19,6 +19,8 @@ def _p(
     airborne_percentage: float | None = None,
     avg_boost: float = 50.0,
     shooting_percentage: float = 25.0,
+    goals: float = 1.0,
+    shots: float = 4.0,
     is_user: bool = False,
 ) -> PlayerStatsSnapshot:
     total_ground_air = time_on_ground + time_airborne
@@ -28,10 +30,10 @@ def _p(
         ap = airborne_percentage
     stats = {
         "score": 100.0,
-        "goals": 0.0,
+        "goals": goals,
         "assists": 0.0,
         "saves": 0.0,
-        "shots": 0.0,
+        "shots": shots,
         "touches": 0.0,
         "shooting_percentage": shooting_percentage,
         "goals_conceded": 0.0,
@@ -119,6 +121,7 @@ class GoalInsightTests(unittest.TestCase):
         msg = result.message
         self.assertIn("You", msg)
         self.assertIn("opponent", msg.lower())
+        self.assertIn("demos inflicted", msg.lower())
 
     def test_1v1_user_demo_above_opponent(self) -> None:
         players = (
@@ -166,6 +169,78 @@ class GoalInsightTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertNotIn("airborne", result.message.lower())
+
+    def test_opponent_fallback_skips_boost_when_opponent_avg_unreliable(self) -> None:
+        """Opponent avg_boost often reads as 0 without real telemetry; do not compare it in 1v1."""
+        players = (
+            _p("1", "Me", 0, avg_boost=43.6, is_user=True),
+            _p("2", "Opp", 1, avg_boost=0.0),
+        )
+        result = compute_goal_insight(players, 30.0, insight_salt=0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertNotIn("average boost", result.message.lower())
+
+    def test_skips_shooting_when_opponent_has_no_shots(self) -> None:
+        """Snapshot uses 0% when shots==0; do not call that comparable to a real percentage."""
+        players = (
+            _p(
+                "1",
+                "Me",
+                0,
+                shooting_percentage=50.0,
+                goals=2.0,
+                shots=4.0,
+                demos_inflicted=1.0,
+                is_user=True,
+            ),
+            _p(
+                "2",
+                "Opp",
+                1,
+                shooting_percentage=0.0,
+                goals=0.0,
+                shots=0.0,
+                demos_inflicted=0.0,
+            ),
+        )
+        result = compute_goal_insight(players, 30.0, insight_salt=0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertNotIn("shooting", result.message.lower())
+
+    def test_marginal_demo_gap_does_not_trigger_strong_outlier_vs_opponent(self) -> None:
+        """0 vs 1 demos is not a dramatic gap; avoid 'well below' / 'much more' demo copy."""
+        low = (
+            _p("1", "Me", 0, demos_inflicted=0.0, is_user=True),
+            _p("2", "Opp", 1, demos_inflicted=1.0),
+        )
+        r1 = compute_goal_insight(low, 30.0)
+        self.assertIsNotNone(r1)
+        assert r1 is not None
+        self.assertNotIn("well below", r1.message.lower())
+        self.assertNotIn("much more", r1.message.lower())
+
+        high = (
+            _p("1", "Me", 0, demos_inflicted=2.0, is_user=True),
+            _p("2", "Opp", 1, demos_inflicted=1.0),
+        )
+        r2 = compute_goal_insight(high, 30.0)
+        self.assertIsNotNone(r2)
+        assert r2 is not None
+        self.assertNotIn("much more", r2.message.lower())
+
+    def test_marginal_demo_gap_does_not_trigger_much_more_vs_teammate(self) -> None:
+        players = (
+            _p("1", "Mate", 0, demos_inflicted=1.0),
+            _p("2", "Me", 0, demos_inflicted=2.0, is_user=True),
+            _p("3", "O1", 1, demos_inflicted=0.0),
+            _p("4", "O2", 1, demos_inflicted=0.0),
+        )
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertNotIn("much more", result.message.lower())
 
     def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
         players = (
