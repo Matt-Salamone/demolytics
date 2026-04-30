@@ -41,6 +41,7 @@ from demolytics.settings import (
     STANDARD_PLAYLIST_MODES,
     save_settings,
 )
+from demolytics.version_check import fetch_latest_release_info, remote_is_newer_than_current
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -196,6 +197,8 @@ class DemolyticsApp(ctk.CTk):
         self._ballchasing_queue: Queue[dict[str, Any]] = Queue()
         self._ballchasing_worker_thread: threading.Thread | None = None
         self._snackbar_after_id: str | None = None
+        self._update_release_url: str | None = None
+        self._update_banner_packed = False
 
         self.title("Demolytics")
         self.geometry("1180x760")
@@ -279,6 +282,9 @@ class DemolyticsApp(ctk.CTk):
         self._poll_queues()
 
     def _build_main_layout(self) -> None:
+        self._update_release_url = None
+        self._update_banner_packed = False
+
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -348,6 +354,8 @@ class DemolyticsApp(ctk.CTk):
         self._build_encounters_tab()
         self._refresh_all_views()
 
+        self._schedule_version_check()
+
         self._snackbar_frame = ctk.CTkFrame(self, corner_radius=10)
         self._snackbar_frame.grid_columnconfigure(0, weight=1)
         self._snackbar_label = ctk.CTkLabel(
@@ -401,6 +409,41 @@ class DemolyticsApp(ctk.CTk):
         except Exception:
             pass
 
+    def _schedule_version_check(self) -> None:
+        def worker() -> None:
+            info = fetch_latest_release_info()
+            if info is None or not remote_is_newer_than_current(info):
+                return
+            ver = info.display_version
+            url = info.html_url
+            self.after(0, lambda v=ver, u=url: self._show_update_available(v, u))
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="demolytics-version-check",
+        ).start()
+
+    def _show_update_available(self, new_version: str, html_url: str) -> None:
+        self._update_release_url = html_url
+        btn = getattr(self, "_update_available_btn", None)
+        if btn is None:
+            return
+        try:
+            if not btn.winfo_exists():
+                return
+        except Exception:
+            return
+        btn.configure(text=f"Update Available: {new_version}")
+        if not self._update_banner_packed:
+            btn.pack(side="right", padx=(16, 0))
+            self._update_banner_packed = True
+
+    def _open_update_release_page(self) -> None:
+        url = self._update_release_url
+        if url:
+            webbrowser.open(url)
+
     def _on_glance_insight_wrap_configure(self, event: Any) -> None:
         if self.glance_goal_insight_label is None:
             return
@@ -435,6 +478,20 @@ class DemolyticsApp(ctk.CTk):
         streak_font = ctk.CTkFont(size=22, weight="bold")
         self.glance_streak_label = ctk.CTkLabel(header, text="🔥 Win streak 0", font=streak_font)
         self.glance_streak_label.pack(side="left")
+
+        self._update_available_btn = ctk.CTkButton(
+            header,
+            text="Update Available",
+            font=ctk.CTkFont(size=13),
+            fg_color=("gray78", "gray28"),
+            hover_color=("gray68", "gray38"),
+            text_color=("#7dd3fc", "#38bdf8"),
+            border_width=1,
+            border_color=("gray58", "gray42"),
+            height=30,
+            corner_radius=8,
+            command=self._open_update_release_page,
+        )
 
         insight_wrap = ctk.CTkFrame(mid, fg_color=("gray90", "gray25"), corner_radius=10)
         insight_wrap.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
