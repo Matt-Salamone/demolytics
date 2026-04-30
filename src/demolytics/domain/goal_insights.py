@@ -23,6 +23,8 @@ MIN_VISIBLE_GROUND_SECONDS = 0.5
 
 # Opponent cars often lack real Boost in the plugin payload; comparing these vs opponents is misleading.
 BOOST_DERIVED_STAT_KEYS = frozenset({"avg_boost"})
+# Rolling opponent baselines from the DB average many matches where speed/boost were never exposed for other cars.
+HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS = frozenset({"avg_boost", "avg_speed"})
 
 # Integer stats: treat ±1–2 demo differences as noise (e.g. 2 vs 1); require gap > this threshold.
 MIN_DEMO_COUNT_GAP_FOR_OUTLIER = 2
@@ -264,7 +266,7 @@ def _historical_outliers(
             if peer_group == "historical_opponents":
                 if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
                     continue
-                if stat_key in BOOST_DERIVED_STAT_KEYS:
+                if stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
                     continue
             med_n = float(baseline.get(stat_key, 0.0))
             sep, direction = _smoothed_separation(uv_n, med_n)
@@ -322,7 +324,7 @@ def _historical_fallback_insight(
             if peer_group == "historical_opponents":
                 if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
                     continue
-                if stat_key in BOOST_DERIVED_STAT_KEYS:
+                if stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
                     continue
             med_display = denormalize_stat_for_display(stat_key, med_n, match_duration_seconds)
             dist = abs(uv_n - med_n)

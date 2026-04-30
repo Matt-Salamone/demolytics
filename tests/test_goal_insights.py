@@ -4,7 +4,7 @@ import unittest
 
 from demolytics.domain.aggregator import PlayerStatsSnapshot
 from demolytics.domain.goal_insights import (
-    BOOST_DERIVED_STAT_KEYS,
+    HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS,
     MIN_LOBBY_SECONDS,
     HistoricalBaselines,
     compute_goal_insight,
@@ -24,6 +24,7 @@ def _p(
     time_airborne: float = 0.0,
     airborne_percentage: float | None = None,
     avg_boost: float = 50.0,
+    avg_speed: float = 1000.0,
     shooting_percentage: float = 25.0,
     goals: float = 1.0,
     shots: float = 4.0,
@@ -49,7 +50,7 @@ def _p(
         "avg_boost": avg_boost,
         "time_zero_boost": time_zero_boost,
         "time_full_boost": 0.0,
-        "avg_speed": 1000.0,
+        "avg_speed": avg_speed,
         "time_boosting": 0.0,
         "time_supersonic": 0.0,
         "time_powerslide": 0.0,
@@ -283,8 +284,8 @@ class GoalInsightTests(unittest.TestCase):
         assert result is not None
         self.assertNotEqual(result.peer_group, "historical_opponents")
 
-    def test_historical_opponents_never_boost_derived_insight(self) -> None:
-        """Saved opponent rows often lack boost; do not compare live boost to historical_opponents."""
+    def test_historical_opponents_never_boost_or_speed_insight(self) -> None:
+        """Saved opponent rows often lack boost/speed; do not compare those live stats to historical_opponents."""
         from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
         players = (
@@ -303,8 +304,35 @@ class GoalInsightTests(unittest.TestCase):
         result = compute_goal_insight(players, 60.0, historical=hist)
         self.assertIsNotNone(result)
         assert result is not None
-        if result.stat_key in BOOST_DERIVED_STAT_KEYS:
+        if result.stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
             self.assertNotEqual(result.peer_group, "historical_opponents")
+
+    def test_historical_opponents_never_avg_speed_even_if_baseline_zero(self) -> None:
+        """Rolling opponent avg_speed is often ~0 without telemetry; must not drive historical_opponents lines."""
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        players = (
+            _p("1", "Me", 0, avg_speed=2500.0, touches=30.0, is_user=True),
+            _p("2", "Opp", 1, avg_speed=1200.0, touches=30.0),
+        )
+        user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        user_rates["avg_speed"] = 2400.0
+        user_rates["touches"] = 0.5
+        opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        opp_rates["avg_speed"] = 0.0
+        opp_rates["touches"] = 0.5
+        hist = HistoricalBaselines(
+            user_rates=user_rates,
+            opponent_rates=opp_rates,
+            n_matches=5,
+            n_opponent_samples=5,
+        )
+        result = compute_goal_insight(players, 60.0, historical=hist)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(
+            result.peer_group == "historical_opponents" and result.stat_key == "avg_speed",
+        )
 
     def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
         players = (
