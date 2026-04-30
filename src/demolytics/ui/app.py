@@ -16,6 +16,7 @@ from demolytics.config.rocket_league import (
     check_stats_api_status,
     setup_instructions,
 )
+from demolytics.setup.stats_api import enable_stats_api
 from demolytics.db.repository import DemolyticsRepository
 from demolytics.domain.aggregator import (
     DashboardSnapshot,
@@ -251,11 +252,25 @@ class DemolyticsApp(ctk.CTk):
             side="left",
             padx=(0, 12),
         )
+        if status.install_dir is not None:
+            ctk.CTkButton(
+                actions,
+                text="Enable Stats API (automatic)",
+                command=self._try_enable_stats_api,
+            ).pack(side="left", padx=(0, 12))
         ctk.CTkButton(
             actions,
             text="Open Dashboard Anyway",
             command=self._open_dashboard_without_api_detection,
         ).pack(side="left")
+
+    def _try_enable_stats_api(self) -> None:
+        st = check_stats_api_status(self.settings.install_dir)
+        if st.install_dir is None:
+            messagebox.showerror("Demolytics", "Rocket League install folder is not known.")
+            return
+        if enable_stats_api(str(st.install_dir), parent=self):
+            self._build_for_current_setup_state()
 
     def _open_dashboard_without_api_detection(self) -> None:
         self._clear_root()
