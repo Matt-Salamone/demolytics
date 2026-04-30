@@ -16,7 +16,7 @@ from demolytics.domain.goal_insight_stats import (
     average_normalized_rows,
     normalize_stats_for_goal_insight,
 )
-from demolytics.domain.goal_insights import HistoricalBaselines
+from demolytics.domain.goal_insights import HistoricalBaselines, MIN_HISTORICAL_MATCHES
 from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
 STAT_COLUMNS_SQL = ",\n".join(f"{key} REAL DEFAULT 0" for key in SUPPORTED_STAT_KEYS)
@@ -228,7 +228,7 @@ class DemolyticsRepository:
         *,
         exclude_match_guid: str | None = None,
         limit: int = 20,
-        min_matches: int = 3,
+        min_matches: int = MIN_HISTORICAL_MATCHES,
     ) -> HistoricalBaselines | None:
         """Trailing normalized averages for the user and opponents faced (same playlist only)."""
         if not user_primary_id or not game_mode:

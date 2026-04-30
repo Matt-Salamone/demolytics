@@ -7,6 +7,7 @@ from pathlib import Path
 
 from demolytics.db.repository import DemolyticsRepository
 from demolytics.domain.aggregator import CompletedMatch, PlayerStatsSnapshot, SessionSnapshot
+from demolytics.domain.goal_insights import MIN_HISTORICAL_MATCHES
 
 
 class RepositoryTests(unittest.TestCase):
@@ -385,22 +386,76 @@ class RepositoryTests(unittest.TestCase):
                     ),
                 )
 
-            for guid, minute, ug in (("MA", 1, 1.0), ("MB", 2, 2.0), ("MC", 3, 3.0)):
+            for guid, minute, ug in (
+                ("MA", 1, 1.0),
+                ("MB", 2, 1.0),
+                ("MC", 3, 1.0),
+                ("MD", 4, 1.0),
+                ("ME", 5, 1.0),
+            ):
                 repository.save_completed_match(match_1v1(guid, minute, ug))
 
             hb = repository.fetch_rolling_goal_insight_baselines("Steam|U|0", "1v1")
             self.assertIsNotNone(hb)
             assert hb is not None
-            self.assertEqual(hb.n_matches, 3)
-            self.assertEqual(hb.n_opponent_samples, 3)
-            self.assertAlmostEqual(hb.user_rates["goals"], 1.0, places=5)
+            self.assertEqual(hb.n_matches, 5)
+            self.assertEqual(hb.n_opponent_samples, 5)
+            self.assertAlmostEqual(hb.user_rates["goals"], 0.5, places=5)
 
             self.assertIsNone(
                 repository.fetch_rolling_goal_insight_baselines(
-                    "Steam|U|0", "1v1", exclude_match_guid="MA", min_matches=3
+                    "Steam|U|0", "1v1", exclude_match_guid="MA", min_matches=MIN_HISTORICAL_MATCHES
                 )
             )
             self.assertIsNone(repository.fetch_rolling_goal_insight_baselines("Steam|U|0", "3v3"))
+
+    def test_fetch_rolling_none_below_default_match_count(self) -> None:
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        def st(**kw: float) -> dict[str, float]:
+            base = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+            base.update(kw)
+            return base
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "newuser.db")
+            repository.initialize()
+            session = SessionSnapshot(
+                session_id="S1",
+                game_mode="1v1",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            repository.upsert_session(session)
+            for i, guid in enumerate(("M1", "M2", "M3"), 1):
+                repository.save_completed_match(
+                    CompletedMatch(
+                        match_guid=guid,
+                        session_id="S1",
+                        timestamp=datetime(2026, 1, 1, i, 0, tzinfo=UTC),
+                        game_mode="1v1",
+                        user_result="Win",
+                        duration_seconds=60.0,
+                        players=(
+                            PlayerStatsSnapshot(
+                                match_guid=guid,
+                                primary_id="Steam|U|0",
+                                player_name="User",
+                                team_num=0,
+                                is_user=True,
+                                stats=st(goals=1.0, shots=2.0),
+                            ),
+                            PlayerStatsSnapshot(
+                                match_guid=guid,
+                                primary_id="Epic|O|0",
+                                player_name="Opp",
+                                team_num=1,
+                                is_user=False,
+                                stats=st(goals=0.0, shots=1.0),
+                            ),
+                        ),
+                    )
+                )
+            self.assertIsNone(repository.fetch_rolling_goal_insight_baselines("Steam|U|0", "1v1"))
 
 
 if __name__ == "__main__":

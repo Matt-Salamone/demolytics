@@ -4,6 +4,7 @@ import unittest
 
 from demolytics.domain.aggregator import PlayerStatsSnapshot
 from demolytics.domain.goal_insights import (
+    BOOST_DERIVED_STAT_KEYS,
     MIN_LOBBY_SECONDS,
     HistoricalBaselines,
     compute_goal_insight,
@@ -18,6 +19,7 @@ def _p(
     time_zero_boost: float = 10.0,
     demos_inflicted: float = 0.0,
     demos_taken: float = 0.0,
+    touches: float = 25.0,
     time_on_ground: float = 100.0,
     time_airborne: float = 0.0,
     airborne_percentage: float | None = None,
@@ -38,7 +40,7 @@ def _p(
         "assists": 0.0,
         "saves": 0.0,
         "shots": shots,
-        "touches": 0.0,
+        "touches": touches,
         "shooting_percentage": shooting_percentage,
         "goals_conceded": 0.0,
         "demos_inflicted": demos_inflicted,
@@ -73,12 +75,12 @@ class GoalInsightTests(unittest.TestCase):
         result = compute_goal_insight(players, 30.0)
         self.assertIsNone(result)
 
-    def test_user_time_zero_boost_outlier_vs_teammate(self) -> None:
+    def test_user_touches_outlier_vs_teammate(self) -> None:
         players = (
-            _p("1", "Quiet", 0, time_zero_boost=10.0),
-            _p("2", "Quiet2", 0, time_zero_boost=10.0),
-            _p("3", "Quiet3", 1, time_zero_boost=10.0),
-            _p("4", "Hungry", 1, time_zero_boost=40.0, is_user=True),
+            _p("1", "Quiet", 0, touches=50.0),
+            _p("2", "Quiet2", 0, touches=50.0),
+            _p("3", "Quiet3", 1, touches=10.0),
+            _p("4", "Hungry", 1, touches=220.0, is_user=True),
         )
         result = compute_goal_insight(players, 20.0)
         self.assertIsNotNone(result)
@@ -86,7 +88,7 @@ class GoalInsightTests(unittest.TestCase):
         msg = result.message
         self.assertIn("You", msg)
         self.assertNotIn("Hungry", msg)
-        self.assertIn("0 boost", msg.lower())
+        self.assertIn("touches", msg.lower())
 
     def test_user_avg_boost_below_teammates(self) -> None:
         players = (
@@ -104,10 +106,10 @@ class GoalInsightTests(unittest.TestCase):
     def test_goal_insight_uses_elapsed_clock_when_stat_time_lags(self) -> None:
         """Stat accumulation pauses around goals; match clock should still unlock early insights."""
         players = (
-            _p("1", "A", 0, time_zero_boost=10.0),
-            _p("2", "B", 0, time_zero_boost=10.0),
-            _p("3", "C", 1, time_zero_boost=10.0),
-            _p("4", "D", 1, time_zero_boost=40.0, is_user=True),
+            _p("1", "A", 0, touches=40.0),
+            _p("2", "B", 0, touches=40.0),
+            _p("3", "C", 1, touches=40.0),
+            _p("4", "D", 1, touches=200.0, is_user=True),
         )
         result = compute_goal_insight(players, 3.0)
         self.assertIsNone(result)
@@ -185,34 +187,6 @@ class GoalInsightTests(unittest.TestCase):
         assert result is not None
         self.assertNotIn("average boost", result.message.lower())
 
-    def test_skips_shooting_when_opponent_has_no_shots(self) -> None:
-        """Snapshot uses 0% when shots==0; do not call that comparable to a real percentage."""
-        players = (
-            _p(
-                "1",
-                "Me",
-                0,
-                shooting_percentage=50.0,
-                goals=2.0,
-                shots=4.0,
-                demos_inflicted=1.0,
-                is_user=True,
-            ),
-            _p(
-                "2",
-                "Opp",
-                1,
-                shooting_percentage=0.0,
-                goals=0.0,
-                shots=0.0,
-                demos_inflicted=0.0,
-            ),
-        )
-        result = compute_goal_insight(players, 30.0, insight_salt=0)
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertNotIn("shooting", result.message.lower())
-
     def test_marginal_demo_gap_does_not_trigger_strong_outlier_vs_opponent(self) -> None:
         """0 vs 1 demos is not a dramatic gap; avoid 'well below' / 'much more' demo copy."""
         low = (
@@ -265,13 +239,13 @@ class GoalInsightTests(unittest.TestCase):
         from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
         players = (
-            _p("1", "Me", 0, time_zero_boost=120.0, is_user=True),
-            _p("2", "Opp", 1, time_zero_boost=10.0),
+            _p("1", "Me", 0, touches=600.0, is_user=True),
+            _p("2", "Opp", 1, touches=40.0),
         )
         user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        user_rates.update({"time_zero_boost": 0.2, "avg_boost": 50.0, "shooting_percentage": 25.0})
+        user_rates.update({"touches": 5.0, "avg_boost": 50.0, "avg_speed": 1000.0})
         opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        opp_rates.update({"time_zero_boost": 1.8, "avg_boost": 50.0, "shooting_percentage": 25.0})
+        opp_rates.update({"touches": 80.0, "avg_boost": 50.0, "avg_speed": 1000.0})
         hist = HistoricalBaselines(
             user_rates=user_rates,
             opponent_rates=opp_rates,
@@ -283,7 +257,53 @@ class GoalInsightTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.kind, "outlier")
         self.assertEqual(result.peer_group, "historical_self")
-        self.assertIn("0 boost", result.message.lower())
+        self.assertIn("touches", result.message.lower())
+
+    def test_historical_opponents_skipped_when_opponent_sample_count_low(self) -> None:
+        """historical_opponents requires enough aggregated opponent rows (thin data after install)."""
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        players = (
+            _p("1", "Me", 0, touches=400.0, is_user=True),
+            _p("2", "Opp", 1, touches=30.0),
+        )
+        user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        user_rates["touches"] = 20.0
+        opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        opp_rates["touches"] = 1.0
+        hist = HistoricalBaselines(
+            user_rates=user_rates,
+            opponent_rates=opp_rates,
+            n_matches=10,
+            n_opponent_samples=2,
+        )
+        result = compute_goal_insight(players, 60.0, historical=hist)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertNotEqual(result.peer_group, "historical_opponents")
+
+    def test_historical_opponents_never_boost_derived_insight(self) -> None:
+        """Saved opponent rows often lack boost; do not compare live boost to historical_opponents."""
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        players = (
+            _p("1", "Me", 0, avg_boost=60.0, is_user=True),
+            _p("2", "Opp", 1, avg_boost=50.0),
+        )
+        user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        user_rates["avg_boost"] = 40.0
+        opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        hist = HistoricalBaselines(
+            user_rates=user_rates,
+            opponent_rates=opp_rates,
+            n_matches=5,
+            n_opponent_samples=5,
+        )
+        result = compute_goal_insight(players, 60.0, historical=hist)
+        self.assertIsNotNone(result)
+        assert result is not None
+        if result.stat_key in BOOST_DERIVED_STAT_KEYS:
+            self.assertNotEqual(result.peer_group, "historical_opponents")
 
     def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
         players = (

@@ -11,20 +11,18 @@ from demolytics.domain.stats import STAT_LABELS
 
 # Floor for "enough" match time so player stats are comparable (in-game clock or accumulated).
 MIN_LOBBY_SECONDS = 4.0
-MIN_HISTORICAL_MATCHES = 3
+# Completed matches in this playlist before historical self-baselines apply (new installs stay lobby-only).
+MIN_HISTORICAL_MATCHES = 5
+# Opponent stat rows aggregated across those matches; below this, skip historical_opponents (noisy / thin data).
+MIN_HISTORICAL_OPPONENT_SAMPLES = 5
 # Minimum smoothed separation max((uv+1)/(med+1), (med+1)/(uv+1)) to count as an outlier.
 OUTLIER_SEPARATION = 1.5
 
 # Rocket League often omits on-ground state for other cars; without ground time, airborne % is meaningless.
 MIN_VISIBLE_GROUND_SECONDS = 0.5
 
-# Snapshot reports 0% shooting when shots==0; that is not comparable to a real percentage.
-MIN_SHOTS_FOR_SHOOTING_COMPARISON = 1
-
 # Opponent cars often lack real Boost in the plugin payload; comparing these vs opponents is misleading.
-BOOST_DERIVED_STAT_KEYS = frozenset(
-    {"avg_boost", "time_zero_boost", "time_full_boost", "time_boosting"}
-)
+BOOST_DERIVED_STAT_KEYS = frozenset({"avg_boost"})
 
 # Integer stats: treat ±1–2 demo differences as noise (e.g. 2 vs 1); require gap > this threshold.
 MIN_DEMO_COUNT_GAP_FOR_OUTLIER = 2
@@ -35,10 +33,17 @@ def _opponent_boost_row_unreliable(p: _PlayerStatsLike, user_team: int) -> bool:
         return False
     return float(p.stats.get("avg_boost", 0.0)) <= 1e-6
 
+
+def _opponent_speed_row_unreliable(p: _PlayerStatsLike, user_team: int) -> bool:
+    if p.team_num == user_team:
+        return False
+    return float(p.stats.get("avg_speed", 0.0)) <= 1e-3
+
+
 _FALLBACK_STAT_KEYS = (
     "avg_boost",
-    "time_zero_boost",
-    "shooting_percentage",
+    "touches",
+    "avg_speed",
     "demos_inflicted",
     "demos_taken",
     "airborne_percentage",
@@ -100,15 +105,6 @@ def _airborne_comparison_trustworthy(
     return all(_airborne_stat_visible(p) for p in peers)
 
 
-def _shooting_comparison_trustworthy(
-    user: _PlayerStatsLike, peers: tuple[_PlayerStatsLike, ...]
-) -> bool:
-    """Only compare shooting % when everyone has at least one shot (otherwise RL reports 0%)."""
-    if float(user.stats.get("shots", 0.0)) < MIN_SHOTS_FOR_SHOOTING_COMPARISON:
-        return False
-    return all(float(p.stats.get("shots", 0.0)) >= MIN_SHOTS_FOR_SHOOTING_COMPARISON for p in peers)
-
-
 def _demo_outlier_gap_ok(stat_key: str, uv: float, med: float) -> bool:
     if stat_key not in ("demos_inflicted", "demos_taken"):
         return True
@@ -140,11 +136,11 @@ def _fallback_eligible_peer_values(
     """Peer values for lobby median, or None if this stat is not comparable for the lobby."""
     if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, lobby_peers):
         return None
-    if stat_key == "shooting_percentage" and not _shooting_comparison_trustworthy(user, lobby_peers):
-        return None
     out: list[float] = []
     for p in lobby_peers:
         if stat_key in BOOST_DERIVED_STAT_KEYS and _opponent_boost_row_unreliable(p, user.team_num):
+            continue
+        if stat_key == "avg_speed" and _opponent_speed_row_unreliable(p, user.team_num):
             continue
         out.append(float(p.stats.get(stat_key, 0.0)))
     return out if out else None
@@ -252,14 +248,12 @@ def _historical_outliers(
     if historical is None or historical.n_matches <= 0:
         return
     for stat_key in (
-        "time_zero_boost",
-        "time_full_boost",
-        "time_boosting",
-        "avg_boost",
+        "touches",
         "demos_inflicted",
         "demos_taken",
+        "avg_boost",
+        "avg_speed",
         "airborne_percentage",
-        "shooting_percentage",
     ):
         uv_raw = float(user.stats.get(stat_key, 0.0))
         uv_n = float(live_norm.get(stat_key, 0.0))
@@ -267,10 +261,12 @@ def _historical_outliers(
             (historical.user_rates, "historical_self", "your recent average in this playlist"),
             (historical.opponent_rates, "historical_opponents", "the recent average of opponents you've faced"),
         ):
-            med_n = float(baseline.get(stat_key, 0.0))
-            if stat_key == "shooting_percentage":
-                if float(user.stats.get("shots", 0.0)) < MIN_SHOTS_FOR_SHOOTING_COMPARISON:
+            if peer_group == "historical_opponents":
+                if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
                     continue
+                if stat_key in BOOST_DERIVED_STAT_KEYS:
+                    continue
+            med_n = float(baseline.get(stat_key, 0.0))
             sep, direction = _smoothed_separation(uv_n, med_n)
             med_display = denormalize_stat_for_display(stat_key, med_n, match_duration_seconds)
             if not _demo_outlier_gap_ok(stat_key, uv_raw, med_display):
@@ -323,8 +319,11 @@ def _historical_fallback_insight(
                 "the recent average of opponents you've faced",
             ),
         ):
-            if stat_key == "shooting_percentage" and float(user.stats.get("shots", 0.0)) < MIN_SHOTS_FOR_SHOOTING_COMPARISON:
-                continue
+            if peer_group == "historical_opponents":
+                if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
+                    continue
+                if stat_key in BOOST_DERIVED_STAT_KEYS:
+                    continue
             med_display = denormalize_stat_for_display(stat_key, med_n, match_duration_seconds)
             dist = abs(uv_n - med_n)
             cand = (dist, stat_key, label_who, uv_raw, med_display, peer_group)
@@ -425,10 +424,18 @@ def _user_vs_peer_median_outliers(
     same_team = peer_group == "teammates"
     peer_phrase = _peer_high_phrase(same_team, len(peers))
 
-    for stat_key in ("time_zero_boost", "demos_inflicted", "demos_taken"):
+    for stat_key in ("demos_inflicted", "demos_taken", "touches", "avg_speed"):
         if peer_group == "opponents" and stat_key in BOOST_DERIVED_STAT_KEYS:
             continue
-        values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
+        values: list[float] = []
+        for p in peers:
+            if stat_key == "avg_speed" and peer_group == "opponents" and _opponent_speed_row_unreliable(
+                p, user.team_num
+            ):
+                continue
+            values.append(float(p.stats.get(stat_key, 0.0)))
+        if not values:
+            continue
         med = _median(values)
         uv = float(user.stats.get(stat_key, 0.0))
         _emit_outlier_for_stat(
@@ -446,38 +453,6 @@ def _user_vs_peer_median_outliers(
 
     if peer_group != "opponents":
         stat_key = "avg_boost"
-        values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
-        med = _median(values)
-        uv = float(user.stats.get(stat_key, 0.0))
-        sep, direction = _smoothed_separation(uv, med)
-        if sep >= OUTLIER_SEPARATION:
-            label = STAT_LABELS.get(stat_key, stat_key)
-            ref = _peer_baseline_label(peers, stat_key, med)
-            if direction == "user_above_peer":
-                consider(
-                    sep,
-                    f"Your {label} is far above {peer_phrase} "
-                    f"({_fmt(stat_key, uv)} vs {ref}).",
-                    stat_key=stat_key,
-                    uv=uv,
-                    med=med,
-                    direction=direction,
-                    peer_group=peer_group,
-                )
-            else:
-                consider(
-                    sep,
-                    f"Your {label} is well below {peer_phrase} "
-                    f"({_fmt(stat_key, uv)} vs {ref}).",
-                    stat_key=stat_key,
-                    uv=uv,
-                    med=med,
-                    direction=direction,
-                    peer_group=peer_group,
-                )
-
-    stat_key = "shooting_percentage"
-    if _shooting_comparison_trustworthy(user, peers):
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         med = _median(values)
         uv = float(user.stats.get(stat_key, 0.0))
