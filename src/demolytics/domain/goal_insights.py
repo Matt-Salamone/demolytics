@@ -42,7 +42,7 @@ def _opponent_speed_row_unreliable(p: _PlayerStatsLike, user_team: int) -> bool:
 
 _FALLBACK_STAT_KEYS = (
     "avg_boost",
-    "possession_percentage",
+    "touches",
     "avg_speed",
     "demos_inflicted",
     "demos_taken",
@@ -248,7 +248,7 @@ def _historical_outliers(
     if historical is None or historical.n_matches <= 0:
         return
     for stat_key in (
-        "possession_percentage",
+        "touches",
         "demos_inflicted",
         "demos_taken",
         "avg_boost",
@@ -424,7 +424,7 @@ def _user_vs_peer_median_outliers(
     same_team = peer_group == "teammates"
     peer_phrase = _peer_high_phrase(same_team, len(peers))
 
-    for stat_key in ("demos_inflicted", "demos_taken", "possession_percentage", "avg_speed"):
+    for stat_key in ("demos_inflicted", "demos_taken", "touches", "avg_speed"):
         if peer_group == "opponents" and stat_key in BOOST_DERIVED_STAT_KEYS:
             continue
         values: list[float] = []
