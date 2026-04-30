@@ -71,6 +71,10 @@ def _live_playlist_mode(snapshot: DashboardSnapshot) -> str | None:
     return None
 
 
+def _encounter_games_phrase(count: int) -> str:
+    return f"{count} game(s)"
+
+
 GLANCE_ICONS: dict[str, str] = {
     "shooting_percentage": "🎯",
     "possession_percentage": "🧭",
@@ -833,7 +837,9 @@ class DemolyticsApp(ctk.CTk):
             ).pack(side="left")
             return
 
-        ctk.CTkLabel(row_frame, text=f"{total_all} games", font=font, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_frame, text=_encounter_games_phrase(total_all), font=font, anchor="w").pack(
+            side="left"
+        )
 
         if not session_id:
             return
@@ -1099,7 +1105,7 @@ class DemolyticsApp(ctk.CTk):
                     kw["text_color"] = tcolor
                 ctk.CTkLabel(inner, text=text, **kw).pack(side="left")
 
-            add_lbl(f"{encounter['player_name']}  |  {total} games")
+            add_lbl(f"{encounter['player_name']}  |  {_encounter_games_phrase(total)}")
             if tmg > 0:
                 add_lbl("  |  ", tcolor=muted)
                 add_lbl("Teammate ", tcolor=muted)

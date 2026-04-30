@@ -19,7 +19,6 @@ from demolytics.domain.events import (
     UpdateStateEvent,
 )
 from demolytics.domain.goal_insights import compute_goal_insight
-from demolytics.goal_insight_logging import append_goal_insight_log
 
 LOGGER = logging.getLogger(__name__)
 
@@ -693,31 +692,7 @@ class DemolyticsAggregator:
             )
             if insight is not None:
                 self._goal_insight = insight.message
-                append_goal_insight_log(
-                    {
-                        "schema_version": 1,
-                        "ts": now.isoformat(),
-                        "match_guid": self.current_match.match_guid,
-                        "session_id": self.active_session.session_id if self.active_session else None,
-                        "game_mode": self.current_match.game_mode,
-                        "total_goals_in_match": int(sum(new_team_scores.values())),
-                        "match_duration_seconds": stat_seconds,
-                        "message": insight.message,
-                        "stat_key": insight.stat_key,
-                        "kind": insight.kind,
-                        "peer_group": insight.peer_group,
-                        "user_value": insight.user_value,
-                        "peer_median": insight.peer_median,
-                        "ratio": insight.ratio,
-                        "outlier_direction": insight.outlier_direction,
-                    }
-                )
-                LOGGER.info(
-                    "Goal insight logged: kind=%s stat_key=%s peer_group=%s",
-                    insight.kind,
-                    insight.stat_key,
-                    insight.peer_group,
-                )
+                LOGGER.info("%s", insight.message)
 
         self._prev_team_scores = dict(new_team_scores)
         for player in event.players:
