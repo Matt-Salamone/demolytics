@@ -318,7 +318,7 @@ class AggregatorTests(unittest.TestCase):
         assert agg.current_match is not None
         user = agg.current_match.players["Steam|1|0"]
         self.assertAlmostEqual(user.time_airborne, 4.0)
-        snap = user.snapshot(opposing_score=0, is_user=True)
+        snap = user.snapshot(opposing_score=0, is_user=True, match_duration_seconds=agg.current_match.duration_seconds)
         self.assertGreater(snap.stats["airborne_percentage"], 0.0)
 
     def test_session_outcome_inferred_when_match_ended_missing(self) -> None:
@@ -621,9 +621,55 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(blue.stats["shots"], 6.0)
         self.assertEqual(blue.stats["goals"], 1.0)
         self.assertAlmostEqual(blue.stats["shooting_percentage"], 100.0 / 6.0)
+        self.assertAlmostEqual(blue.stats["possession_percentage"], 0.0)
         self.assertAlmostEqual(blue.stats["avg_boost"], 65.0)
         self.assertAlmostEqual(orange.stats["avg_boost"], 25.0)
         self.assertAlmostEqual(orange.stats["shooting_percentage"], 100.0)
+        self.assertAlmostEqual(orange.stats["possession_percentage"], 0.0)
+
+    def test_possession_percentage_tracks_last_touch_holder(self) -> None:
+        teams = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+
+        def tick(elapsed: float, ta: int, tb: int) -> UpdateStateEvent:
+            return UpdateStateEvent(
+                "M-POS",
+                (
+                    PlayerState(
+                        "A",
+                        "Steam|a|0",
+                        1,
+                        0,
+                        touches=ta,
+                        boost=50,
+                        speed=1000.0,
+                        on_ground=True,
+                    ),
+                    PlayerState(
+                        "B",
+                        "Steam|b|0",
+                        2,
+                        1,
+                        touches=tb,
+                        boost=50,
+                        speed=1000.0,
+                        on_ground=True,
+                    ),
+                ),
+                GameState(teams=teams, elapsed=elapsed),
+            )
+
+        agg = DemolyticsAggregator(user_primary_id="Steam|a|0")
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        agg.handle_event(tick(0.0, 0, 0), t0)
+        agg.handle_event(tick(5.0, 1, 0), datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC))
+        agg.handle_event(tick(10.0, 1, 0), datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC))
+        agg.handle_event(tick(15.0, 1, 1), datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC))
+        agg.handle_event(tick(20.0, 1, 1), datetime(2026, 1, 1, 0, 0, 4, tzinfo=UTC))
+        snap = agg.snapshot()
+        pa = next(p for p in snap.live_players if p.primary_id == "Steam|a|0")
+        pb = next(p for p in snap.live_players if p.primary_id == "Steam|b|0")
+        self.assertAlmostEqual(pa.stats["possession_percentage"], 50.0)
+        self.assertAlmostEqual(pb.stats["possession_percentage"], 25.0)
 
     def test_win_streak_on_session(self) -> None:
         aggregator = DemolyticsAggregator()

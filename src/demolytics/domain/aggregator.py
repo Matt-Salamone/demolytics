@@ -104,6 +104,7 @@ class PlayerAccumulator:
     saves: int = 0
     shots: int = 0
     touches: int = 0
+    possession_seconds: float = 0.0
     demos_inflicted_scoreboard: int = 0
     demos_inflicted_statfeed: int = 0
     demos_taken_state: int = 0
@@ -188,7 +189,10 @@ class PlayerAccumulator:
         self,
         opposing_score: int,
         is_user: bool,
+        match_duration_seconds: float,
     ) -> PlayerStatsSnapshot:
+        dur = max(0.0, float(match_duration_seconds))
+        possession_pct = (100.0 * self.possession_seconds / dur) if dur > 0 else 0.0
         stats = {
             "score": float(self.score),
             "goals": float(self.goals),
@@ -196,6 +200,7 @@ class PlayerAccumulator:
             "saves": float(self.saves),
             "shots": float(self.shots),
             "touches": float(self.touches),
+            "possession_percentage": possession_pct,
             "shooting_percentage": (self.goals / self.shots * 100) if self.shots else 0.0,
             "goals_conceded": float(opposing_score),
             "demos_inflicted": float(
@@ -235,6 +240,7 @@ class MatchAccumulator:
     players: dict[str, PlayerAccumulator] = field(default_factory=dict)
     teams: dict[int, TeamState] = field(default_factory=dict)
     multiplayer_seen: bool = False
+    _possession_holder_id: str | None = None
 
     def apply_update(
         self,
@@ -255,6 +261,18 @@ class MatchAccumulator:
         stat_delta = delta_seconds if track_stats else 0.0
         self.duration_seconds += stat_delta
         preserve_scoreboard = not track_stats and self.multiplayer_seen
+
+        prev_touches: dict[str, int] = {}
+        for player in event.players:
+            if not player.primary_id:
+                continue
+            acc = self.players.get(player.primary_id)
+            prev_touches[player.primary_id] = acc.touches if acc is not None else 0
+
+        if stat_delta > 0 and track_stats and self._possession_holder_id:
+            holder = self.players.get(self._possession_holder_id)
+            if holder is not None:
+                holder.possession_seconds += stat_delta
 
         for player in event.players:
             if not player.primary_id:
@@ -277,6 +295,12 @@ class MatchAccumulator:
                 preserve_scoreboard=preserve_scoreboard,
             )
 
+        for player in event.players:
+            if not player.primary_id:
+                continue
+            if player.touches > prev_touches.get(player.primary_id, 0):
+                self._possession_holder_id = player.primary_id
+
     def player_by_ref(self, ref: PlayerRef | None) -> PlayerAccumulator | None:
         if ref is None:
             return None
@@ -289,10 +313,12 @@ class MatchAccumulator:
         return None
 
     def snapshots(self, user_primary_id: str | None) -> tuple[PlayerStatsSnapshot, ...]:
+        dur = self.duration_seconds
         return tuple(
             player.snapshot(
                 opposing_score=self._opposing_score(player.team_num),
                 is_user=player.primary_id == user_primary_id,
+                match_duration_seconds=dur,
             )
             for player in self.players.values()
         )
@@ -314,6 +340,7 @@ class MatchAccumulator:
             saves = sum(p.saves for p in mates)
             shots = sum(p.shots for p in mates)
             touches = sum(p.touches for p in mates)
+            possession_seconds = sum(p.possession_seconds for p in mates)
             demos_inflicted = sum(
                 max(p.demos_inflicted_scoreboard, p.demos_inflicted_statfeed) for p in mates
             )
@@ -334,6 +361,8 @@ class MatchAccumulator:
                 default=0,
             )
             shooting_percentage = (100.0 * goals / shots) if shots else 0.0
+            dur = self.duration_seconds
+            team_possession_pct = (100.0 * possession_seconds / dur) if dur > 0 else 0.0
             stats: dict[str, float] = {
                 "score": float(team.score),
                 "goals": float(goals),
@@ -341,6 +370,7 @@ class MatchAccumulator:
                 "saves": float(saves),
                 "shots": float(shots),
                 "touches": float(touches),
+                "possession_percentage": team_possession_pct,
                 "shooting_percentage": shooting_percentage,
                 "goals_conceded": float(opposing_score),
                 "demos_inflicted": float(demos_inflicted),

@@ -8,6 +8,7 @@ _DURATION_EPS = 1e-3
 _AS_STORED_KEYS = frozenset(
     {
         "shooting_percentage",
+        "possession_percentage",
         "airborne_percentage",
         "avg_boost",
         "avg_speed",

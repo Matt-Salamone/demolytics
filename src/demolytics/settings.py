@@ -18,6 +18,16 @@ SETTINGS_FILE_NAME = "settings.json"
 DEFAULT_PORT = 49123
 
 DEFAULT_GLANCE_STATS: tuple[str, ...] = (
+    "possession_percentage",
+    "team_demos_inflicted",
+    "team_demos_taken",
+    "avg_boost",
+    "avg_speed",
+    "airborne_percentage",
+)
+
+# If settings still contain exactly this list (previous default), migrate to ``DEFAULT_GLANCE_STATS``.
+_PREVIOUS_DEFAULT_GLANCE_STATS: tuple[str, ...] = (
     "shooting_percentage",
     "team_demos_inflicted",
     "team_demos_taken",
@@ -98,6 +108,8 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
         glance_stats = list(DEFAULT_GLANCE_STATS)
     glance_stats = [str(key) for key in glance_stats if str(key) in GLANCE_STAT_KEYS]
     if not glance_stats:
+        glance_stats = list(DEFAULT_GLANCE_STATS)
+    elif tuple(glance_stats) == _PREVIOUS_DEFAULT_GLANCE_STATS:
         glance_stats = list(DEFAULT_GLANCE_STATS)
 
     visible_stats = [str(key) for key in visible_stats if str(key) in STATS_TAB_COLUMN_KEYS]

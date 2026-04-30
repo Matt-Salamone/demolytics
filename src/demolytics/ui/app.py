@@ -62,6 +62,7 @@ def _normalize_playlist_mode(mode: str) -> str:
 
 GLANCE_ICONS: dict[str, str] = {
     "shooting_percentage": "🎯",
+    "possession_percentage": "🧭",
     "demos_inflicted": "💥",
     "demos_taken": "🛡️",
     "avg_boost": "⚡",
@@ -70,6 +71,7 @@ GLANCE_ICONS: dict[str, str] = {
     "team_demos_inflicted": "💥",
     "team_demos_taken": "🛡️",
     "team_shooting_percentage": "🎯",
+    "team_possession_percentage": "🧭",
     "team_avg_boost": "⚡",
     "team_avg_speed": "🏎️",
     "team_airborne_percentage": "✈️",

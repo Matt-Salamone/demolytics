@@ -20,6 +20,7 @@ def _p(
     demos_inflicted: float = 0.0,
     demos_taken: float = 0.0,
     touches: float = 25.0,
+    possession_percentage: float = 35.0,
     time_on_ground: float = 100.0,
     time_airborne: float = 0.0,
     airborne_percentage: float | None = None,
@@ -41,6 +42,7 @@ def _p(
         "saves": 0.0,
         "shots": shots,
         "touches": touches,
+        "possession_percentage": possession_percentage,
         "shooting_percentage": shooting_percentage,
         "goals_conceded": 0.0,
         "demos_inflicted": demos_inflicted,
@@ -75,12 +77,12 @@ class GoalInsightTests(unittest.TestCase):
         result = compute_goal_insight(players, 30.0)
         self.assertIsNone(result)
 
-    def test_user_touches_outlier_vs_teammate(self) -> None:
+    def test_user_possession_outlier_vs_teammate(self) -> None:
         players = (
-            _p("1", "Quiet", 0, touches=50.0),
-            _p("2", "Quiet2", 0, touches=50.0),
-            _p("3", "Quiet3", 1, touches=10.0),
-            _p("4", "Hungry", 1, touches=220.0, is_user=True),
+            _p("1", "Quiet", 0, possession_percentage=22.0),
+            _p("2", "Quiet2", 0, possession_percentage=22.0),
+            _p("3", "Quiet3", 1, possession_percentage=8.0),
+            _p("4", "Hungry", 1, possession_percentage=88.0, is_user=True),
         )
         result = compute_goal_insight(players, 20.0)
         self.assertIsNotNone(result)
@@ -88,7 +90,7 @@ class GoalInsightTests(unittest.TestCase):
         msg = result.message
         self.assertIn("You", msg)
         self.assertNotIn("Hungry", msg)
-        self.assertIn("touches", msg.lower())
+        self.assertIn("possession", msg.lower())
 
     def test_user_avg_boost_below_teammates(self) -> None:
         players = (
@@ -106,10 +108,10 @@ class GoalInsightTests(unittest.TestCase):
     def test_goal_insight_uses_elapsed_clock_when_stat_time_lags(self) -> None:
         """Stat accumulation pauses around goals; match clock should still unlock early insights."""
         players = (
-            _p("1", "A", 0, touches=40.0),
-            _p("2", "B", 0, touches=40.0),
-            _p("3", "C", 1, touches=40.0),
-            _p("4", "D", 1, touches=200.0, is_user=True),
+            _p("1", "A", 0, possession_percentage=22.0),
+            _p("2", "B", 0, possession_percentage=22.0),
+            _p("3", "C", 1, possession_percentage=22.0),
+            _p("4", "D", 1, possession_percentage=82.0, is_user=True),
         )
         result = compute_goal_insight(players, 3.0)
         self.assertIsNone(result)
@@ -239,13 +241,13 @@ class GoalInsightTests(unittest.TestCase):
         from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
         players = (
-            _p("1", "Me", 0, touches=600.0, is_user=True),
-            _p("2", "Opp", 1, touches=40.0),
+            _p("1", "Me", 0, possession_percentage=72.0, is_user=True),
+            _p("2", "Opp", 1, possession_percentage=28.0),
         )
         user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        user_rates.update({"touches": 5.0, "avg_boost": 50.0, "avg_speed": 1000.0})
+        user_rates.update({"possession_percentage": 5.0, "avg_boost": 50.0, "avg_speed": 1000.0})
         opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        opp_rates.update({"touches": 80.0, "avg_boost": 50.0, "avg_speed": 1000.0})
+        opp_rates.update({"possession_percentage": 80.0, "avg_boost": 50.0, "avg_speed": 1000.0})
         hist = HistoricalBaselines(
             user_rates=user_rates,
             opponent_rates=opp_rates,
@@ -257,20 +259,20 @@ class GoalInsightTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.kind, "outlier")
         self.assertEqual(result.peer_group, "historical_self")
-        self.assertIn("touches", result.message.lower())
+        self.assertIn("possession", result.message.lower())
 
     def test_historical_opponents_skipped_when_opponent_sample_count_low(self) -> None:
         """historical_opponents requires enough aggregated opponent rows (thin data after install)."""
         from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
         players = (
-            _p("1", "Me", 0, touches=400.0, is_user=True),
-            _p("2", "Opp", 1, touches=30.0),
+            _p("1", "Me", 0, possession_percentage=55.0, is_user=True),
+            _p("2", "Opp", 1, possession_percentage=45.0),
         )
         user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        user_rates["touches"] = 20.0
+        user_rates["possession_percentage"] = 20.0
         opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
-        opp_rates["touches"] = 1.0
+        opp_rates["possession_percentage"] = 1.0
         hist = HistoricalBaselines(
             user_rates=user_rates,
             opponent_rates=opp_rates,
