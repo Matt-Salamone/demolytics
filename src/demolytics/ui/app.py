@@ -55,6 +55,29 @@ _BALLCHASING_NO_REPLAY_SNACKBAR = (
 
 _GLANCE_CARD_MIN_HEIGHT = 100
 
+# Centered tab content: default cap (Stats subtabs, Live Match pair base, encounter playlist strip).
+_TAB_CONTENT_MAX_WIDTH = 440
+# Wider caps for tabs with more horizontal content.
+_DASHBOARD_TAB_MAX_WIDTH = 880
+_HISTORY_TAB_MAX_WIDTH = 1024
+_ENCOUNTERS_TAB_MAX_WIDTH = 1024
+# Live Match: You and Teams each use up to one default column width; pair is centered as a unit.
+_STATS_LIVE_MATCH_PAIR_MAX_WIDTH = 2 * _TAB_CONTENT_MAX_WIDTH
+# Inset inside bordered panels (Stats subtabs, Encounters only; not the encounter playlist strip).
+_STATS_CONTENT_PANEL_PAD = 12
+# Main CTkTabview: slightly wider than the widest inner content max so the tab chrome fits with padding.
+_TAB_VIEW_OUTER_PADDING = 56
+_TAB_VIEW_MAX_OUTER_WIDTH = (
+    max(
+        _DASHBOARD_TAB_MAX_WIDTH,
+        _HISTORY_TAB_MAX_WIDTH,
+        _ENCOUNTERS_TAB_MAX_WIDTH,
+        _STATS_LIVE_MATCH_PAIR_MAX_WIDTH,
+        _TAB_CONTENT_MAX_WIDTH,
+    )
+    + _TAB_VIEW_OUTER_PADDING
+)
+
 
 def _normalize_playlist_mode(mode: str) -> str:
     if mode in STANDARD_PLAYLIST_MODES:
@@ -69,6 +92,18 @@ def _live_playlist_mode(snapshot: DashboardSnapshot) -> str | None:
     if snapshot.current_game_mode in STANDARD_PLAYLIST_MODES:
         return snapshot.current_game_mode
     return None
+
+
+def _stats_session_playlist_mode(snapshot: DashboardSnapshot) -> str:
+    """Playlist for Live Match context and Session vs All-Time (from session / lobby, not user radios)."""
+    live = _live_playlist_mode(snapshot)
+    if live is not None:
+        return live
+    if snapshot.session and snapshot.session.game_mode:
+        return _normalize_playlist_mode(snapshot.session.game_mode)
+    if snapshot.current_game_mode:
+        return _normalize_playlist_mode(snapshot.current_game_mode)
+    return "1v1"
 
 
 def _encounter_games_phrase(count: int) -> str:
@@ -153,8 +188,9 @@ class DemolyticsApp(ctk.CTk):
         self._lobby_session_id_for_encounters: str | None = None
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
-        self._comparison_mode_var = StringVar(value=_normalize_playlist_mode(settings.comparison_game_mode))
-        self._last_auto_sync_live_mode: str | None = None
+        self._encounter_playlist_var = StringVar(
+            value=_normalize_playlist_mode(settings.comparison_game_mode),
+        )
         self._replay_created_stash: dict[str, dict[str, Any]] = {}
         self._ballchasing_queue: Queue[dict[str, Any]] = Queue()
         self._ballchasing_worker_thread: threading.Thread | None = None
@@ -248,8 +284,44 @@ class DemolyticsApp(ctk.CTk):
             pady=10,
         )
 
-        self.tab_view = ctk.CTkTabview(self)
-        self.tab_view.grid(row=1, column=0, sticky="nsew", padx=16, pady=16)
+        tab_lane = ctk.CTkFrame(self, fg_color="transparent")
+        tab_lane.grid(row=1, column=0, sticky="nsew", padx=12, pady=12)
+        tab_lane.grid_columnconfigure(0, weight=1)
+        tab_lane.grid_columnconfigure(1, weight=0)
+        tab_lane.grid_columnconfigure(2, weight=1)
+        tab_lane.grid_rowconfigure(0, weight=1)
+
+        tab_wrap = ctk.CTkFrame(tab_lane, fg_color="transparent")
+        tab_wrap.grid(row=0, column=1, sticky="nsew")
+        tab_wrap.grid_rowconfigure(0, weight=1)
+        tab_wrap.grid_columnconfigure(0, weight=1)
+        tab_wrap.grid_propagate(False)
+
+        self.tab_view = ctk.CTkTabview(tab_wrap)
+        self.tab_view.grid(row=0, column=0, sticky="nsew")
+
+        def _sync_tab_wrap() -> None:
+            if not tab_lane.winfo_exists() or not tab_wrap.winfo_exists():
+                return
+            try:
+                aw = int(tab_lane.winfo_width())
+                ah = int(tab_lane.winfo_height())
+            except Exception:
+                return
+            if aw <= 8:
+                return
+            w = max(360, min(_TAB_VIEW_MAX_OUTER_WIDTH, aw - 8))
+            h = max(120, ah - 4)
+            pair = (w, h)
+            if getattr(tab_lane, "_demoly_tab_wh", None) == pair:
+                return
+            tab_lane._demoly_tab_wh = pair
+            tab_wrap.configure(width=w, height=h)
+
+        tab_lane.bind("<Configure>", lambda _e: _sync_tab_wrap(), add="+")
+        self.after_idle(_sync_tab_wrap)
+        self.after(100, _sync_tab_wrap)
+
         self.glance_tab = self.tab_view.add("Dashboard")
         self.stats_tab = self.tab_view.add("Stats")
         self.history_tab = self.tab_view.add("Match History")
@@ -328,11 +400,19 @@ class DemolyticsApp(ctk.CTk):
 
     def _build_glance_dashboard_tab(self) -> None:
         self.glance_tab.grid_columnconfigure(0, weight=1)
-        for row in (0, 1, 3):
-            self.glance_tab.grid_rowconfigure(row, weight=0)
-        self.glance_tab.grid_rowconfigure(2, weight=1)
+        self.glance_tab.grid_rowconfigure(0, weight=1)
 
-        header = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        mid = self._centered_max_width_mid(
+            self.glance_tab,
+            max_width=_DASHBOARD_TAB_MAX_WIDTH,
+            fill_height=True,
+        )
+        mid.grid_columnconfigure(0, weight=1)
+        for row in (0, 1, 3):
+            mid.grid_rowconfigure(row, weight=0)
+        mid.grid_rowconfigure(2, weight=1)
+
+        header = ctk.CTkFrame(mid, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
         big_font = ctk.CTkFont(size=28, weight="bold")
         self.glance_session_label = ctk.CTkLabel(header, text="Session 0 - 0", font=big_font)
@@ -341,7 +421,7 @@ class DemolyticsApp(ctk.CTk):
         self.glance_streak_label = ctk.CTkLabel(header, text="🔥 Win streak 0", font=streak_font)
         self.glance_streak_label.pack(side="left")
 
-        insight_wrap = ctk.CTkFrame(self.glance_tab, fg_color=("gray90", "gray25"), corner_radius=10)
+        insight_wrap = ctk.CTkFrame(mid, fg_color=("gray90", "gray25"), corner_radius=10)
         insight_wrap.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
         insight_wrap.grid_columnconfigure(0, weight=1)
         self.glance_goal_insight_label = ctk.CTkLabel(
@@ -359,7 +439,7 @@ class DemolyticsApp(ctk.CTk):
         self.glance_goal_insight_label.grid(row=0, column=0, sticky="ew", padx=14, pady=12)
         insight_wrap.bind("<Configure>", self._on_glance_insight_wrap_configure)
 
-        stats_area = ctk.CTkScrollableFrame(self.glance_tab, fg_color="transparent")
+        stats_area = ctk.CTkScrollableFrame(mid, fg_color="transparent")
         stats_area.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
         stats_area.grid_columnconfigure(0, weight=1, minsize=120)
         stats_area.grid_columnconfigure(1, weight=1, minsize=120)
@@ -393,7 +473,7 @@ class DemolyticsApp(ctk.CTk):
                 col = 0
                 row += 1
 
-        lobby_section = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        lobby_section = ctk.CTkFrame(mid, fg_color="transparent")
         lobby_section.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 16))
         lobby_section.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
@@ -408,21 +488,24 @@ class DemolyticsApp(ctk.CTk):
 
     def _build_stats_tab(self) -> None:
         self.stats_tab.grid_columnconfigure(0, weight=1)
-        self.stats_tab.grid_rowconfigure(0, weight=0)
-        self.stats_tab.grid_rowconfigure(1, weight=1)
-
-        self._build_comparison_mode_bar(row=0, column=0)
+        self.stats_tab.grid_rowconfigure(0, weight=1)
 
         self.stats_subtab_view = ctk.CTkTabview(self.stats_tab)
-        self.stats_subtab_view.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.stats_subtab_view.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
         live_parent = self.stats_subtab_view.add("Live Match")
         session_parent = self.stats_subtab_view.add("Session vs All-Time")
         global_parent = self.stats_subtab_view.add("You vs Encountered Average")
 
-        for tab_body in (session_parent, global_parent):
-            tab_body.grid_columnconfigure(0, weight=1)
-            tab_body.grid_rowconfigure(0, weight=1)
+        live_parent.grid_columnconfigure(0, weight=1)
+        live_parent.grid_rowconfigure(0, weight=1)
+
+        session_parent.grid_columnconfigure(0, weight=1)
+        session_parent.grid_rowconfigure(0, weight=1)
+
+        global_parent.grid_columnconfigure(0, weight=1)
+        global_parent.grid_rowconfigure(0, weight=0)
+        global_parent.grid_rowconfigure(1, weight=1)
 
         self._build_live_match_panel(live_parent)
 
@@ -430,11 +513,19 @@ class DemolyticsApp(ctk.CTk):
             session_parent,
             "Session vs All-Time",
             show_mode_scope=True,
+            body_max_width=_TAB_CONTENT_MAX_WIDTH,
         )
+
+        self._build_encounter_playlist_bar(global_parent)
+        global_body = ctk.CTkFrame(global_parent, fg_color="transparent")
+        global_body.grid(row=1, column=0, sticky="nsew")
+        global_body.grid_columnconfigure(0, weight=1)
+        global_body.grid_rowconfigure(0, weight=1)
         global_frame, self.stats_global_scope_label = self._stats_column(
-            global_parent,
+            global_body,
             "You vs Encountered Average",
             show_mode_scope=True,
+            body_max_width=_TAB_CONTENT_MAX_WIDTH,
         )
 
         for stat_key in self.settings.visible_stats:
@@ -451,14 +542,104 @@ class DemolyticsApp(ctk.CTk):
                 "-- / --",
             )
 
-    def _build_comparison_mode_bar(self, row: int, column: int) -> None:
-        bar = ctk.CTkFrame(self.stats_tab, fg_color=("gray88", "gray22"), corner_radius=8)
-        bar.grid(row=row, column=column, sticky="ew", padx=8, pady=(8, 4))
+    def _centered_max_width_mid(
+        self,
+        parent: ctk.CTkFrame,
+        *,
+        row: int = 0,
+        column: int = 0,
+        max_width: int = _TAB_CONTENT_MAX_WIDTH,
+        fill_height: bool,
+        outer_sticky: str = "nsew",
+        padx: int | tuple[int, int] = 0,
+        pady: int | tuple[int, int] = 0,
+        content_panel: bool = False,
+        panel_pad: int = _STATS_CONTENT_PANEL_PAD,
+    ) -> ctk.CTkFrame:
+        """Grid a full-width `holder` on parent; return the frame where content should be placed.
+
+        When ``content_panel`` is True, the returned frame is inset inside a bordered panel with
+        ``panel_pad`` padding so content does not touch the border.
+        """
+        holder = ctk.CTkFrame(parent, fg_color="transparent")
+        holder.grid(row=row, column=column, sticky=outer_sticky, padx=padx, pady=pady)
+        holder.grid_columnconfigure(0, weight=1)
+        holder.grid_columnconfigure(1, weight=0)
+        holder.grid_columnconfigure(2, weight=1)
+        holder.grid_rowconfigure(0, weight=1 if fill_height else 0)
+
+        if content_panel:
+            mid = ctk.CTkFrame(
+                holder,
+                corner_radius=12,
+                fg_color=("gray93", "gray19"),
+                border_width=1,
+                border_color=("gray80", "gray34"),
+            )
+        else:
+            mid = ctk.CTkFrame(holder, fg_color="transparent")
+        mid.grid(row=0, column=1, sticky="nsew" if fill_height else "n")
+
+        if content_panel:
+            mid.grid_rowconfigure(0, weight=1)
+            mid.grid_columnconfigure(0, weight=1)
+            target = ctk.CTkFrame(mid, fg_color="transparent")
+            target.grid(row=0, column=0, sticky="nsew", padx=panel_pad, pady=panel_pad)
+        else:
+            target = mid
+
+        mid.grid_propagate(False)
+
+        def _sync() -> None:
+            if not holder.winfo_exists() or not mid.winfo_exists():
+                return
+            try:
+                hw = int(holder.winfo_width())
+                hh = int(holder.winfo_height())
+            except Exception:
+                return
+            if hw <= 4:
+                return
+            w = max(260, min(max_width, hw - 4))
+            if fill_height:
+                h = max(80, hh)
+            else:
+                base_h = 64
+                h = base_h + (2 * panel_pad if content_panel else 0)
+            pair = (w, h)
+            if getattr(holder, "_demoly_mid_wh", None) == pair:
+                return
+            holder._demoly_mid_wh = pair
+            mid.configure(width=w, height=h)
+
+        def _on_holder_configure(_event: Any = None) -> None:
+            # Do not filter on event.widget: CTk can deliver Configure with a different widget
+            # reference while the holder geometry is what we need; the (w, h) guard stops loops.
+            _sync()
+
+        holder.bind("<Configure>", _on_holder_configure, add="+")
+        self.after_idle(_sync)
+        self.after(100, _sync)
+        return target
+
+    def _build_encounter_playlist_bar(self, parent: ctk.CTkFrame) -> None:
+        mid = self._centered_max_width_mid(
+            parent,
+            row=0,
+            column=0,
+            max_width=_TAB_CONTENT_MAX_WIDTH,
+            fill_height=False,
+            outer_sticky="ew",
+            padx=8,
+            pady=(8, 4),
+        )
+        bar = ctk.CTkFrame(mid, fg_color=("gray88", "gray22"), corner_radius=8)
+        bar.pack(fill="x", expand=True, padx=0, pady=0)
         inner = ctk.CTkFrame(bar, fg_color="transparent")
         inner.pack(fill="x", padx=10, pady=8)
         ctk.CTkLabel(
             inner,
-            text="Session & baseline use playlist:",
+            text="Encountered-average playlist:",
             font=ctk.CTkFont(size=13, weight="bold"),
             anchor="w",
         ).pack(side="left", padx=(0, 12))
@@ -466,13 +647,13 @@ class DemolyticsApp(ctk.CTk):
             ctk.CTkRadioButton(
                 inner,
                 text=mode,
-                variable=self._comparison_mode_var,
+                variable=self._encounter_playlist_var,
                 value=mode,
-                command=self._on_comparison_mode_user_pick,
+                command=self._on_encounter_playlist_user_pick,
             ).pack(side="left", padx=(0, 10))
 
-    def _on_comparison_mode_user_pick(self) -> None:
-        mode = _normalize_playlist_mode(self._comparison_mode_var.get())
+    def _on_encounter_playlist_user_pick(self) -> None:
+        mode = _normalize_playlist_mode(self._encounter_playlist_var.get())
         if mode != self.settings.comparison_game_mode:
             self.settings.comparison_game_mode = mode
             save_settings(self.settings)
@@ -481,16 +662,25 @@ class DemolyticsApp(ctk.CTk):
     def _build_live_match_panel(self, parent: ctk.CTkFrame) -> None:
         """Live Match: You and Teams side by side; optional playlist mismatch message."""
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_columnconfigure(1, weight=1)
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        mid = self._centered_max_width_mid(
+            parent,
+            max_width=_STATS_LIVE_MATCH_PAIR_MAX_WIDTH,
+            fill_height=True,
+            content_panel=True,
+        )
+        mid.grid_columnconfigure(0, weight=1)
+        mid.grid_columnconfigure(1, weight=1)
+        mid.grid_rowconfigure(1, weight=1)
 
         title_font = ctk.CTkFont(size=15, weight="bold")
-        self._live_match_header_you = ctk.CTkLabel(parent, text="You", font=title_font, anchor="w")
+        self._live_match_header_you = ctk.CTkLabel(mid, text="You", font=title_font, anchor="w")
         self._live_match_header_you.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
-        self._live_match_header_teams = ctk.CTkLabel(parent, text="Teams", font=title_font, anchor="w")
+        self._live_match_header_teams = ctk.CTkLabel(mid, text="Teams", font=title_font, anchor="w")
         self._live_match_header_teams.grid(row=0, column=1, sticky="w", padx=8, pady=(8, 4))
 
-        self._live_match_stats_wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        self._live_match_stats_wrap = ctk.CTkFrame(mid, fg_color="transparent")
         self._live_match_stats_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=(0, 8))
         self._live_match_stats_wrap.grid_columnconfigure(0, weight=1)
         self._live_match_stats_wrap.grid_columnconfigure(1, weight=1)
@@ -498,21 +688,23 @@ class DemolyticsApp(ctk.CTk):
 
         personal_scroll = ctk.CTkScrollableFrame(self._live_match_stats_wrap)
         personal_scroll.grid(row=0, column=0, sticky="nsew", padx=8, pady=0)
-        personal_scroll.grid_columnconfigure(1, weight=1)
+        personal_scroll.grid_columnconfigure(0, weight=1)
+        personal_scroll.grid_columnconfigure(1, weight=0)
 
         teams_scroll = ctk.CTkScrollableFrame(self._live_match_stats_wrap)
         teams_scroll.grid(row=0, column=1, sticky="nsew", padx=8, pady=0)
-        teams_scroll.grid_columnconfigure(1, weight=1)
+        teams_scroll.grid_columnconfigure(0, weight=1)
+        teams_scroll.grid_columnconfigure(1, weight=0)
 
-        self._live_match_mismatch_wrap = ctk.CTkFrame(parent, fg_color=("gray88", "gray22"), corner_radius=8)
+        self._live_match_mismatch_wrap = ctk.CTkFrame(mid, fg_color=("gray88", "gray22"), corner_radius=8)
         self._live_match_mismatch_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=8, pady=(0, 8))
         self._live_match_mismatch_wrap.grid_columnconfigure(0, weight=1)
         self._live_match_mismatch_wrap.grid_rowconfigure(0, weight=1)
         self._live_match_mismatch_label = ctk.CTkLabel(
             self._live_match_mismatch_wrap,
             text=(
-                "Select the playlist that matches your current match above to view live stats "
-                "for this session."
+                "Session averages follow the playlist reported for this session; that does not match "
+                "the playlist detected for the current lobby. Live stats still reflect the match in progress."
             ),
             font=ctk.CTkFont(size=14),
             wraplength=520,
@@ -570,37 +762,65 @@ class DemolyticsApp(ctk.CTk):
         title: str,
         *,
         show_mode_scope: bool,
+        body_max_width: int | None = None,
     ) -> tuple[ctk.CTkScrollableFrame, ctk.CTkLabel | None]:
         wrapper = ctk.CTkFrame(parent, fg_color="transparent")
         wrapper.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        wrapper.grid_rowconfigure(0, weight=1)
         wrapper.grid_columnconfigure(0, weight=1)
 
         title_font = ctk.CTkFont(size=15, weight="bold")
-        ctk.CTkLabel(wrapper, text=title, font=title_font, anchor="w").grid(
-            row=0,
-            column=0,
-            sticky="w",
-            padx=4,
-            pady=(0, 2),
-        )
         scope_label: ctk.CTkLabel | None = None
-        scroll_row = 1
-        if show_mode_scope:
-            scope_label = ctk.CTkLabel(
-                wrapper,
-                text="",
-                font=ctk.CTkFont(size=12),
-                text_color=("gray35", "gray70"),
-                anchor="w",
-                justify="left",
-                wraplength=480,
+
+        def _add_title_and_scope(stack: ctk.CTkFrame, wraplen: int) -> int:
+            nonlocal scope_label
+            row = 0
+            ctk.CTkLabel(stack, text=title, font=title_font, anchor="w").grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=4,
+                pady=(0, 2),
             )
-            scope_label.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
-            scroll_row = 2
-        wrapper.grid_rowconfigure(scroll_row, weight=1)
-        frame = ctk.CTkScrollableFrame(wrapper)
+            row += 1
+            if show_mode_scope:
+                scope_label = ctk.CTkLabel(
+                    stack,
+                    text="",
+                    font=ctk.CTkFont(size=12),
+                    text_color=("gray35", "gray70"),
+                    anchor="w",
+                    justify="left",
+                    wraplength=wraplen,
+                )
+                scope_label.grid(row=row, column=0, sticky="ew", padx=4, pady=(0, 8))
+                row += 1
+            return row
+
+        if body_max_width is not None:
+            wraplen = max(160, body_max_width - 16)
+            mid = self._centered_max_width_mid(
+                wrapper,
+                max_width=body_max_width,
+                fill_height=True,
+                content_panel=True,
+            )
+            mid.grid_columnconfigure(0, weight=1)
+            scroll_row = _add_title_and_scope(mid, wraplen)
+            mid.grid_rowconfigure(scroll_row, weight=1)
+            scroll_parent = mid
+        else:
+            scroll_row = _add_title_and_scope(wrapper, 480)
+            wrapper.grid_rowconfigure(scroll_row, weight=1)
+            scroll_parent = wrapper
+
+        frame = ctk.CTkScrollableFrame(scroll_parent)
         frame.grid(row=scroll_row, column=0, sticky="nsew")
-        frame.grid_columnconfigure(1, weight=1)
+        if body_max_width is not None:
+            frame.grid_columnconfigure(0, weight=1)
+            frame.grid_columnconfigure(1, weight=0)
+        else:
+            frame.grid_columnconfigure(1, weight=1)
         return frame, scope_label
 
     def _stat_row(self, parent: ctk.CTkFrame, label: str, value: str) -> ctk.CTkLabel:
@@ -612,23 +832,40 @@ class DemolyticsApp(ctk.CTk):
 
     def _build_history_tab(self) -> None:
         self.history_tab.grid_columnconfigure(0, weight=1)
-        self.history_tab.grid_rowconfigure(1, weight=1)
-        ctk.CTkButton(
+        self.history_tab.grid_rowconfigure(0, weight=1)
+
+        mid = self._centered_max_width_mid(
             self.history_tab,
+            max_width=_HISTORY_TAB_MAX_WIDTH,
+            fill_height=True,
+        )
+        mid.grid_columnconfigure(0, weight=1)
+        mid.grid_rowconfigure(1, weight=1)
+        ctk.CTkButton(
+            mid,
             text="Refresh History",
             command=self._refresh_history,
         ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
-        self.history_frame = ctk.CTkScrollableFrame(self.history_tab)
+        self.history_frame = ctk.CTkScrollableFrame(mid)
         self.history_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         self.history_frame.grid_columnconfigure(0, weight=1)
 
     def _build_encounters_tab(self) -> None:
         self.encounters_tab.grid_columnconfigure(0, weight=1)
-        self.encounters_tab.grid_rowconfigure(1, weight=1)
-        self.encounters_frame = ctk.CTkScrollableFrame(self.encounters_tab)
+        self.encounters_tab.grid_rowconfigure(0, weight=1)
+
+        mid = self._centered_max_width_mid(
+            self.encounters_tab,
+            max_width=_ENCOUNTERS_TAB_MAX_WIDTH,
+            fill_height=True,
+            content_panel=True,
+        )
+        mid.grid_columnconfigure(0, weight=1)
+        mid.grid_rowconfigure(1, weight=1)
+        self.encounters_frame = ctk.CTkScrollableFrame(mid)
         self.encounters_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         self.encounters_frame.grid_columnconfigure(0, weight=1)
-        controls = ctk.CTkFrame(self.encounters_tab, fg_color="transparent")
+        controls = ctk.CTkFrame(mid, fg_color="transparent")
         controls.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.encounter_search = ctk.CTkEntry(controls, placeholder_text="Search player name")
         self.encounter_search.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -959,17 +1196,10 @@ class DemolyticsApp(ctk.CTk):
             session_id = None
 
         live_pl = _live_playlist_mode(snapshot)
-        if live_pl is not None:
-            if live_pl != self._last_auto_sync_live_mode:
-                self._last_auto_sync_live_mode = live_pl
-                if self.settings.comparison_game_mode != live_pl:
-                    self.settings.comparison_game_mode = live_pl
-                    self._comparison_mode_var.set(live_pl)
-                    save_settings(self.settings)
+        session_playlist_mode = _stats_session_playlist_mode(snapshot)
+        encounter_playlist_mode = _normalize_playlist_mode(self._encounter_playlist_var.get())
 
-        comparison_mode = _normalize_playlist_mode(self._comparison_mode_var.get())
-
-        live_mismatch = live_pl is not None and comparison_mode != live_pl
+        live_mismatch = live_pl is not None and session_playlist_mode != live_pl
         stats_wrap = getattr(self, "_live_match_stats_wrap", None)
         mismatch_wrap = getattr(self, "_live_match_mismatch_wrap", None)
         header_you = getattr(self, "_live_match_header_you", None)
@@ -1008,26 +1238,31 @@ class DemolyticsApp(ctk.CTk):
                 )
 
         session_averages = self.repository.get_user_averages(
-            game_mode=comparison_mode,
+            game_mode=session_playlist_mode,
             session_id=session_id,
         )
-        all_time_averages = self.repository.get_user_averages(game_mode=comparison_mode)
-        global_baseline = self.repository.get_global_baseline(game_mode=comparison_mode)
+        all_time_session_playlist = self.repository.get_user_averages(game_mode=session_playlist_mode)
+        global_baseline = self.repository.get_global_baseline(game_mode=encounter_playlist_mode)
+        all_time_encounter_playlist = self.repository.get_user_averages(game_mode=encounter_playlist_mode)
 
         if self.stats_session_scope_label is not None:
             self.stats_session_scope_label.configure(
-                text=_stats_comparison_scope_caption(comparison_mode, "session"),
+                text=_stats_comparison_scope_caption(session_playlist_mode, "session"),
             )
         if self.stats_global_scope_label is not None:
             self.stats_global_scope_label.configure(
-                text=_stats_comparison_scope_caption(comparison_mode, "global"),
+                text=_stats_comparison_scope_caption(encounter_playlist_mode, "encounter"),
             )
 
         for stat_key, label in self.session_average_labels.items():
-            value = _format_comparison(stat_key, session_averages.get(stat_key), all_time_averages.get(stat_key))
+            value = _format_comparison(
+                stat_key,
+                session_averages.get(stat_key),
+                all_time_session_playlist.get(stat_key),
+            )
             label.configure(text=value)
         for stat_key, label in self.global_average_labels.items():
-            user_value = all_time_averages.get(stat_key)
+            user_value = all_time_encounter_playlist.get(stat_key)
             global_value = global_baseline.get(stat_key)
             label.configure(text=_format_comparison(stat_key, user_value, global_value))
 
@@ -1051,7 +1286,20 @@ class DemolyticsApp(ctk.CTk):
                 f"{match['timestamp']}  |  {match['inferred_game_mode']}  |  "
                 f"{match['user_result'] or 'Unknown'}  |  {match['duration_seconds']:.0f}s"
             )
-            ctk.CTkLabel(row, text=text, anchor="w").grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+            text_label = ctk.CTkLabel(row, text=text, anchor="w", justify="left")
+            text_label.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+
+            def _sync_history_row_wrap(_event: Any = None) -> None:
+                try:
+                    rw = int(row.winfo_width())
+                except Exception:
+                    return
+                if rw > 120:
+                    text_label.configure(wraplength=max(160, rw - 110))
+
+            row.bind("<Configure>", lambda _e: _sync_history_row_wrap(), add="+")
+            self.after_idle(_sync_history_row_wrap)
+
             ctk.CTkButton(
                 row,
                 text="Details",
@@ -1472,8 +1720,7 @@ class DemolyticsApp(ctk.CTk):
         self.global_average_labels.clear()
         self.stats_session_scope_label = None
         self.stats_global_scope_label = None
-        self._comparison_mode_var.set(_normalize_playlist_mode(self.settings.comparison_game_mode))
-        self._last_auto_sync_live_mode = _live_playlist_mode(self.snapshot)
+        self._encounter_playlist_var.set(_normalize_playlist_mode(self.settings.comparison_game_mode))
         self._build_stats_tab()
         self._refresh_stats_tab(self.snapshot)
 
@@ -1500,12 +1747,12 @@ def _stats_comparison_scope_caption(
     comparison_mode: str,
     column: str,
 ) -> str:
-    """Explains session / baseline columns use the playlist selected above (or auto from lobby)."""
+    """Explains which playlist each Stats sub-tab uses for its numbers."""
     mode = _normalize_playlist_mode(comparison_mode)
     if column == "session":
         return (
             f"{mode}: this session's per-game average vs your all-time per-game average in {mode} "
-            f"(playlist chosen above; lobby may switch it automatically)."
+            f"(playlist follows your current session / lobby)."
         )
     return (
         f"{mode}: your all-time per-game average vs the average for other players recorded in your "
