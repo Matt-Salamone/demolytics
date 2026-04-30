@@ -413,6 +413,53 @@ class DemolyticsRepository:
             ).fetchall()
         return {str(row["primary_id"]): row for row in rows}
 
+    def get_encounters_for_primary_ids_in_session(
+        self, primary_ids: Iterable[str], session_id: str
+    ) -> dict[str, sqlite3.Row]:
+        """Encounter counts and W/L for matches in a single RL session (lobby), per platform ID."""
+        ids = tuple({pid for pid in primary_ids if pid})
+        if not ids or not session_id.strip():
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    p.primary_id,
+                    MAX(p.player_name) AS player_name,
+                    SUM(CASE WHEN p.team_num = u.team_num THEN 1 ELSE 0 END) AS teammate_games,
+                    SUM(CASE WHEN p.team_num != u.team_num THEN 1 ELSE 0 END) AS opponent_games,
+                    SUM(
+                        CASE WHEN p.team_num = u.team_num AND m.user_result = 'Win'
+                        THEN 1 ELSE 0 END
+                    ) AS teammate_wins,
+                    SUM(
+                        CASE WHEN p.team_num = u.team_num AND m.user_result = 'Loss'
+                        THEN 1 ELSE 0 END
+                    ) AS teammate_losses,
+                    SUM(
+                        CASE WHEN p.team_num != u.team_num AND m.user_result = 'Win'
+                        THEN 1 ELSE 0 END
+                    ) AS opponent_wins,
+                    SUM(
+                        CASE WHEN p.team_num != u.team_num AND m.user_result = 'Loss'
+                        THEN 1 ELSE 0 END
+                    ) AS opponent_losses,
+                    COUNT(*) AS total_games
+                FROM player_match_stats p
+                JOIN player_match_stats u
+                    ON u.match_guid = p.match_guid
+                    AND u.is_user = 1
+                JOIN matches m ON m.match_guid = p.match_guid
+                WHERE p.is_user = 0
+                    AND p.primary_id IN ({placeholders})
+                    AND m.session_id = ?
+                GROUP BY p.primary_id
+                """,
+                (*ids, session_id),
+            ).fetchall()
+        return {str(row["primary_id"]): row for row in rows}
+
     def set_setting(self, key: str, value: str) -> None:
         with self.connect() as connection:
             connection.execute(

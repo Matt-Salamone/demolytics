@@ -263,6 +263,69 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(int(by_id["Steam|222|0"]["teammate_losses"]), 0)
             self.assertNotIn("Epic|999|0", by_id)
 
+    def test_get_encounters_for_primary_ids_in_session_filters_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")
+            repository.initialize()
+            s1 = SessionSnapshot(
+                session_id="S1",
+                game_mode="2v2",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                wins=0,
+                losses=0,
+            )
+            s2 = SessionSnapshot(
+                session_id="S2",
+                game_mode="2v2",
+                start_time=datetime(2026, 1, 2, tzinfo=UTC),
+                wins=0,
+                losses=0,
+            )
+            repository.upsert_session(s1)
+            repository.upsert_session(s2)
+
+            def match(guid: str, sid: str, result: str) -> CompletedMatch:
+                return CompletedMatch(
+                    match_guid=guid,
+                    session_id=sid,
+                    timestamp=datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+                    game_mode="2v2",
+                    user_result=result,
+                    duration_seconds=300,
+                    players=(
+                        PlayerStatsSnapshot(
+                            match_guid=guid,
+                            primary_id="Steam|111|0",
+                            player_name="User",
+                            team_num=0,
+                            is_user=True,
+                            stats={"score": 100},
+                        ),
+                        PlayerStatsSnapshot(
+                            match_guid=guid,
+                            primary_id="Steam|222|0",
+                            player_name="Mate",
+                            team_num=1,
+                            is_user=False,
+                            stats={"score": 50},
+                        ),
+                    ),
+                )
+
+            repository.save_completed_match(match("M1", "S1", "Win"))
+            repository.save_completed_match(match("M2", "S2", "Loss"))
+
+            all_rows = repository.get_encounters_for_primary_ids(("Steam|222|0",))
+            self.assertEqual(int(all_rows["Steam|222|0"]["opponent_games"]), 2)
+
+            s1_only = repository.get_encounters_for_primary_ids_in_session(("Steam|222|0",), "S1")
+            self.assertEqual(int(s1_only["Steam|222|0"]["opponent_games"]), 1)
+            self.assertEqual(int(s1_only["Steam|222|0"]["opponent_wins"]), 1)
+            self.assertEqual(int(s1_only["Steam|222|0"]["opponent_losses"]), 0)
+
+            self.assertEqual(repository.get_encounters_for_primary_ids_in_session((), "S1"), {})
+            self.assertEqual(repository.get_encounters_for_primary_ids_in_session(("Steam|222|0",), ""), {})
+
     def test_clear_all_data_removes_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repository = DemolyticsRepository(Path(temp_dir) / "demolytics.db")

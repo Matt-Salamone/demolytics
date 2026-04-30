@@ -79,6 +79,38 @@ GLANCE_ICONS: dict[str, str] = {
 }
 
 
+def _wl_record_color(wins: int, losses: int) -> str | tuple[str, str]:
+    if wins > losses:
+        return "#3dd68c"
+    if losses > wins:
+        return "#ff6b6b"
+    return ("gray35", "gray70")
+
+
+def _encounter_row_vector(row: Any | None) -> str:
+    if row is None:
+        return "-"
+    return (
+        f"{int(row['teammate_games'])}:{int(row['opponent_games'])}:"
+        f"{int(row['teammate_wins'])}:{int(row['teammate_losses'])}:"
+        f"{int(row['opponent_wins'])}:{int(row['opponent_losses'])}"
+    )
+
+
+def _lobby_encounter_stats_signature(
+    ids: tuple[str, ...],
+    db_rows: dict[str, Any],
+    session_rows: dict[str, Any],
+    session_key: str,
+) -> str:
+    parts: list[str] = []
+    for pid in sorted(ids):
+        parts.append(
+            f"{pid}@{_encounter_row_vector(db_rows.get(pid))}@{_encounter_row_vector(session_rows.get(pid))}"
+        )
+    return f"{session_key}#" + "|".join(parts)
+
+
 class DemolyticsApp(ctk.CTk):
     def __init__(self, settings: AppSettings, repository: DemolyticsRepository) -> None:
         super().__init__()
@@ -100,7 +132,6 @@ class DemolyticsApp(ctk.CTk):
         self.glance_goal_insight_label: ctk.CTkLabel | None = None
         self.lobby_encounters_frame: ctk.CTkScrollableFrame | None = None
         self._lobby_encounter_cache_ids: tuple[str, ...] | None = None
-        self._lobby_encounter_cache_lines: list[str] = []
         self._lobby_encounter_ui_signature: str | None = None
         self._lobby_session_id_for_encounters: str | None = None
         self.history_rows: list[ctk.CTkFrame] = []
@@ -265,6 +296,18 @@ class DemolyticsApp(ctk.CTk):
         except Exception:
             pass
 
+    def _on_glance_insight_wrap_configure(self, event: Any) -> None:
+        if self.glance_goal_insight_label is None:
+            return
+        try:
+            if not self.glance_goal_insight_label.winfo_exists():
+                return
+            w = int(event.widget.winfo_width())
+        except Exception:
+            return
+        if w > 48:
+            self.glance_goal_insight_label.configure(wraplength=max(120, w - 28))
+
     def _build_glance_dashboard_tab(self) -> None:
         self.glance_tab.grid_columnconfigure(0, weight=1)
         for row in (0, 1, 3):
@@ -290,12 +333,13 @@ class DemolyticsApp(ctk.CTk):
                 "(needs a few seconds of match time on the clock)."
             ),
             font=ctk.CTkFont(size=15),
-            wraplength=1020,
+            wraplength=400,
             justify="left",
             anchor="w",
             text_color=("gray30", "gray80"),
         )
         self.glance_goal_insight_label.grid(row=0, column=0, sticky="ew", padx=14, pady=12)
+        insight_wrap.bind("<Configure>", self._on_glance_insight_wrap_configure)
 
         stats_area = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
         stats_area.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
@@ -334,7 +378,7 @@ class DemolyticsApp(ctk.CTk):
         lobby_section.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             lobby_section,
-            text="👥 This lobby — prior games with you",
+            text="👥 This lobby",
             font=ctk.CTkFont(size=16, weight="bold"),
             anchor="w",
         ).grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -720,6 +764,73 @@ class DemolyticsApp(ctk.CTk):
 
         self._refresh_lobby_encounters(snapshot)
 
+    def _pack_lobby_player_row(
+        self,
+        parent: ctk.CTkScrollableFrame,
+        display_name: str,
+        row_all: Any | None,
+        row_session: Any | None,
+        *,
+        session_id: str | None,
+    ) -> None:
+        row_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        row_frame.pack(anchor="w", fill="x", padx=8, pady=4)
+        font = ctk.CTkFont(size=15)
+        muted = ("gray45", "gray55")
+
+        ctk.CTkLabel(row_frame, text=display_name, font=font, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_frame, text=" · ", font=font, anchor="w", text_color=muted).pack(side="left")
+
+        teammate_all = int(row_all["teammate_games"]) if row_all is not None else 0
+        opponent_all = int(row_all["opponent_games"]) if row_all is not None else 0
+        total_all = teammate_all + opponent_all
+
+        if total_all == 0:
+            ctk.CTkLabel(
+                row_frame,
+                text="no prior matches recorded",
+                font=font,
+                anchor="w",
+                text_color="gray",
+            ).pack(side="left")
+            return
+
+        ctk.CTkLabel(row_frame, text=f"{total_all} games", font=font, anchor="w").pack(side="left")
+
+        if not session_id:
+            return
+
+        stg = int(row_session["teammate_games"]) if row_session is not None else 0
+        sog = int(row_session["opponent_games"]) if row_session is not None else 0
+        if stg + sog == 0:
+            return
+
+        if stg > 0:
+            ctk.CTkLabel(row_frame, text=" · ", font=font, anchor="w", text_color=muted).pack(side="left")
+            ctk.CTkLabel(row_frame, text="session teammate ", font=font, anchor="w").pack(side="left")
+            stw = int(row_session["teammate_wins"])
+            stl = int(row_session["teammate_losses"])
+            ctk.CTkLabel(
+                row_frame,
+                text=f"{stw}-{stl}",
+                font=font,
+                anchor="w",
+                text_color=_wl_record_color(stw, stl),
+            ).pack(side="left")
+
+        if sog > 0:
+            ctk.CTkLabel(row_frame, text=" · ", font=font, anchor="w", text_color=muted).pack(side="left")
+            ctk.CTkLabel(row_frame, text="session opponent ", font=font, anchor="w").pack(side="left")
+            sow = int(row_session["opponent_wins"])
+            sol = int(row_session["opponent_losses"])
+            ctk.CTkLabel(
+                row_frame,
+                text=f"{sow}-{sol}",
+                font=font,
+                anchor="w",
+                text_color=_wl_record_color(sow, sol),
+            ).pack(side="left")
+
     def _refresh_lobby_encounters(self, snapshot: DashboardSnapshot) -> None:
         if self.lobby_encounters_frame is None:
             return
@@ -728,34 +839,41 @@ class DemolyticsApp(ctk.CTk):
         if current_sid != self._lobby_session_id_for_encounters:
             self._lobby_session_id_for_encounters = current_sid
             self._lobby_encounter_cache_ids = None
-            self._lobby_encounter_cache_lines = []
             self._lobby_encounter_ui_signature = None
 
         others = [p for p in snapshot.live_players if not p.is_user and p.primary_id]
         if others:
             ids = tuple(sorted(p.primary_id for p in others))
-            db_rows = self.repository.get_encounters_for_primary_ids(ids)
-            lines: list[str] = []
-            for player in sorted(others, key=lambda p: (p.player_name or "").lower()):
-                row = db_rows.get(player.primary_id)
-                teammate = int(row["teammate_games"]) if row is not None else 0
-                opponent = int(row["opponent_games"]) if row is not None else 0
-                total = teammate + opponent
-                name = (player.player_name or "").strip() or player.primary_id
-                if total == 0:
-                    lines.append(f"{name}  —  no prior matches recorded")
-                else:
-                    lines.append(f"{name}  —  {total} prior matches")
             self._lobby_encounter_cache_ids = ids
-            self._lobby_encounter_cache_lines = list(lines)
-            signature = f"live:{','.join(ids)}"
-        elif self._lobby_encounter_cache_lines and self._lobby_encounter_cache_ids is not None:
-            lines = list(self._lobby_encounter_cache_lines)
-            signature = f"cache:{','.join(self._lobby_encounter_cache_ids)}"
+        elif self._lobby_encounter_cache_ids is not None:
+            ids = self._lobby_encounter_cache_ids
         else:
-            lines = []
-            signature = "placeholder"
+            ids = ()
 
+        if not ids:
+            signature = "placeholder"
+            if signature == self._lobby_encounter_ui_signature:
+                return
+            self._lobby_encounter_ui_signature = signature
+            for child in self.lobby_encounters_frame.winfo_children():
+                child.destroy()
+            ctk.CTkLabel(
+                self.lobby_encounters_frame,
+                text="Join a match to see how often you have played with each lobby player.",
+                font=ctk.CTkFont(size=14),
+                text_color="gray",
+                wraplength=520,
+                justify="left",
+                anchor="w",
+            ).pack(anchor="w", padx=8, pady=6)
+            return
+
+        db_rows = self.repository.get_encounters_for_primary_ids(ids)
+        session_rows: dict[str, Any] = {}
+        if current_sid:
+            session_rows = self.repository.get_encounters_for_primary_ids_in_session(ids, current_sid)
+
+        signature = _lobby_encounter_stats_signature(ids, db_rows, session_rows, current_sid or "")
         if signature == self._lobby_encounter_ui_signature:
             return
 
@@ -763,26 +881,28 @@ class DemolyticsApp(ctk.CTk):
         for child in self.lobby_encounters_frame.winfo_children():
             child.destroy()
 
-        if not lines:
-            ctk.CTkLabel(
-                self.lobby_encounters_frame,
-                text="Join a match to see how often you have played with each lobby player.",
-                font=ctk.CTkFont(size=14),
-                text_color="gray",
-                wraplength=900,
-                justify="left",
-                anchor="w",
-            ).pack(anchor="w", padx=8, pady=6)
-            return
+        if others:
+            ordered = [
+                (
+                    p.primary_id,
+                    (p.player_name or "").strip() or p.primary_id,
+                )
+                for p in sorted(others, key=lambda pl: (pl.player_name or "").lower())
+            ]
+        else:
+            ordered = []
+            for pid in sorted(ids):
+                r = db_rows.get(pid)
+                ordered.append((pid, str(r["player_name"]) if r is not None else pid))
 
-        for line in lines:
-            ctk.CTkLabel(
+        for pid, display_name in ordered:
+            self._pack_lobby_player_row(
                 self.lobby_encounters_frame,
-                text=line,
-                font=ctk.CTkFont(size=15),
-                anchor="w",
-                justify="left",
-            ).pack(anchor="w", padx=8, pady=4)
+                display_name,
+                db_rows.get(pid),
+                session_rows.get(pid),
+                session_id=current_sid,
+            )
 
     def _refresh_stats_tab(self, snapshot: DashboardSnapshot) -> None:
         if snapshot.session:
@@ -902,18 +1022,33 @@ class DemolyticsApp(ctk.CTk):
             row = ctk.CTkFrame(self.encounters_frame)
             row.grid(row=index, column=0, sticky="ew", padx=4, pady=4)
             row.grid_columnconfigure(0, weight=1)
+            inner = ctk.CTkFrame(row, fg_color="transparent")
+            inner.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
             tw = int(encounter["teammate_wins"])
             tl = int(encounter["teammate_losses"])
             ow = int(encounter["opponent_wins"])
             ol = int(encounter["opponent_losses"])
             total = int(encounter["total_games"])
-            text = (
-                f"{encounter['player_name']}  |  "
-                f"{total} games  |  "
-                f"Teammate {tw}-{tl}  |  "
-                f"Opponent {ow}-{ol}"
-            )
-            ctk.CTkLabel(row, text=text, anchor="w").grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+            tmg = int(encounter["teammate_games"])
+            opg = int(encounter["opponent_games"])
+            font = ctk.CTkFont(size=14)
+            muted = ("gray40", "gray65")
+
+            def add_lbl(text: str, *, tcolor: str | tuple[str, str] | None = None) -> None:
+                kw: dict[str, Any] = {"font": font, "anchor": "w"}
+                if tcolor is not None:
+                    kw["text_color"] = tcolor
+                ctk.CTkLabel(inner, text=text, **kw).pack(side="left")
+
+            add_lbl(f"{encounter['player_name']}  |  {total} games")
+            if tmg > 0:
+                add_lbl("  |  ", tcolor=muted)
+                add_lbl("Teammate ", tcolor=muted)
+                add_lbl(f"{tw}-{tl}", tcolor=_wl_record_color(tw, tl))
+            if opg > 0:
+                add_lbl("  |  ", tcolor=muted)
+                add_lbl("Opponent ", tcolor=muted)
+                add_lbl(f"{ow}-{ol}", tcolor=_wl_record_color(ow, ol))
             self.encounter_rows.append(row)
 
     def _show_match_details(self, match_guid: str) -> None:
@@ -1236,7 +1371,6 @@ class DemolyticsApp(ctk.CTk):
             self.aggregator.reset_tracking_state()
             self.snapshot = self.aggregator.snapshot()
             self._lobby_encounter_cache_ids = None
-            self._lobby_encounter_cache_lines = []
             self._lobby_encounter_ui_signature = None
             self._lobby_session_id_for_encounters = None
             confirm.destroy()
