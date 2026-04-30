@@ -1514,7 +1514,7 @@ class DemolyticsApp(ctk.CTk):
             int_scroll,
             text=(
                 "Create an API token on ballchasing.com (see link below), then paste it here. "
-                "Your token is stored only in your local Demolytics settings file on this PC."
+                "Your token is stored in Windows Credential Manager on this PC (not in settings.json)."
             ),
             wraplength=440,
             justify="left",

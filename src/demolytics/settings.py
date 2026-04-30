@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import keyring
+from keyring import errors as keyring_errors
+
 from demolytics.domain.stats import (
     DEFAULT_STATS_TAB_VISIBLE,
     GLANCE_STAT_KEYS,
@@ -36,7 +39,10 @@ _PREVIOUS_DEFAULT_GLANCE_STATS: tuple[str, ...] = (
     "airborne_percentage",
 )
 
-SETTINGS_FORMAT_VERSION = 2
+SETTINGS_FORMAT_VERSION = 3
+
+KEYRING_SERVICE = "Demolytics"
+KEYRING_BALLCHASING_TOKEN = "ballchasing_api_token"
 
 STANDARD_PLAYLIST_MODES: tuple[str, ...] = ("1v1", "2v2", "3v3")
 
@@ -72,16 +78,57 @@ def get_settings_path() -> Path:
     return get_app_data_dir() / SETTINGS_FILE_NAME
 
 
+def get_ballchasing_token_from_keyring() -> str:
+    try:
+        value = keyring.get_password(KEYRING_SERVICE, KEYRING_BALLCHASING_TOKEN)
+    except Exception:
+        return ""
+    return (value or "").strip()
+
+
+def sync_ballchasing_token_to_keyring(token: str) -> None:
+    token = token.strip()
+    try:
+        if token:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_BALLCHASING_TOKEN, token)
+        else:
+            try:
+                keyring.delete_password(KEYRING_SERVICE, KEYRING_BALLCHASING_TOKEN)
+            except keyring_errors.PasswordDeleteError:
+                pass
+    except Exception:
+        pass
+
+
+def _ballchasing_token_with_legacy_migration(legacy_plaintext: str) -> str:
+    stored = get_ballchasing_token_from_keyring()
+    if stored:
+        return stored
+    legacy = legacy_plaintext.strip()
+    if not legacy:
+        return ""
+    try:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_BALLCHASING_TOKEN, legacy)
+    except Exception:
+        pass
+    return legacy
+
+
 def load_settings(path: Path | None = None) -> AppSettings:
     settings_path = path or get_settings_path()
     if not settings_path.exists():
         settings = AppSettings(database_path=str(get_default_database_path()))
+        settings.ballchasing_token = get_ballchasing_token_from_keyring()
         return settings
 
     raw = json.loads(settings_path.read_text(encoding="utf-8"))
+    legacy_token = ""
+    if isinstance(raw.get("ballchasing_token"), str):
+        legacy_token = raw["ballchasing_token"].strip()
     prev_fmt = int(raw.get("settings_format_version", 1))
     coerced = _coerce_known_settings(raw)
     settings = AppSettings(**coerced)
+    settings.ballchasing_token = _ballchasing_token_with_legacy_migration(legacy_token)
     if settings.database_path is None:
         settings.database_path = str(get_default_database_path())
     if prev_fmt < SETTINGS_FORMAT_VERSION:
@@ -90,10 +137,13 @@ def load_settings(path: Path | None = None) -> AppSettings:
 
 
 def save_settings(settings: AppSettings, path: Path | None = None) -> None:
+    sync_ballchasing_token_to_keyring(settings.ballchasing_token)
     settings_path = path or get_settings_path()
     settings_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(settings)
+    payload.pop("ballchasing_token", None)
     settings_path.write_text(
-        json.dumps(asdict(settings), indent=2, sort_keys=True),
+        json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -126,7 +176,6 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
         comparison_game_mode = "1v1"
 
     ballchasing_auto_upload = bool(raw.get("ballchasing_auto_upload", True))
-    ballchasing_token = str(raw.get("ballchasing_token", "")).strip()
     ballchasing_visibility = str(raw.get("ballchasing_visibility", "private")).lower()
     if ballchasing_visibility not in BALLCHASING_VISIBILITY_CHOICES:
         ballchasing_visibility = "private"
@@ -140,6 +189,5 @@ def _coerce_known_settings(raw: dict[str, Any]) -> dict[str, Any]:
         "database_path": raw.get("database_path"),
         "install_dir": raw.get("install_dir"),
         "ballchasing_auto_upload": ballchasing_auto_upload,
-        "ballchasing_token": ballchasing_token,
         "ballchasing_visibility": ballchasing_visibility,
     }

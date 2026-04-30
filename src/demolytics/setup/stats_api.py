@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import configparser
 import ctypes
-import logging
 import os
-import shutil
-import tempfile
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,9 +16,10 @@ from demolytics.config.rocket_league import DEFAULT_STATS_API_RELATIVE_PATH
 if TYPE_CHECKING:
     from customtkinter import CTkBaseClass
 
-LOGGER = logging.getLogger(__name__)
-
 PACKET_SEND_RATE_TARGET = 20
+
+# Hide elevated helper window (console/GUI) after UAC acceptance.
+_SW_HIDE = 0
 
 _PROTECTED_FOLDER_EXPLANATION = (
     "Rocket League appears to be installed under a protected Windows folder "
@@ -74,31 +74,16 @@ def _manual_steps_text(ini_path: Path) -> str:
     )
 
 
-def _resolve_python_for_elevated_helper() -> str | None:
-    for cmd in ("py", "python", "python3"):
-        found = shutil.which(cmd)
-        if found:
-            return found
-    return None
-
-
-def _elevated_patch_script_body(ini_path: Path, packet_send_rate: int) -> str:
-    """Single-file Python source run elevated; paths embedded with repr for safety."""
-    return (
-        "import configparser\n"
-        "from pathlib import Path\n"
-        f"path = Path({repr(str(ini_path.resolve()))})\n"
-        "path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "parser = configparser.ConfigParser()\n"
-        "parser.optionxform = str\n"
-        "if path.exists():\n"
-        "    parser.read(path, encoding='utf-8-sig')\n"
-        "if not parser.has_section('StatsAPI'):\n"
-        "    parser.add_section('StatsAPI')\n"
-        f"parser.set('StatsAPI', 'PacketSendRate', {repr(str(packet_send_rate))})\n"
-        "with open(path, 'w', encoding='utf-8', newline='') as handle:\n"
-        "    parser.write(handle)\n"
-    )
+def _elevated_executable_and_parameters(ini_path: Path) -> tuple[str, str]:
+    """Relaunch this application elevated; argv embeds the resolved INI path (no writable temp script)."""
+    resolved = str(ini_path.resolve())
+    if getattr(sys, "frozen", False):
+        executable = sys.argv[0]
+        params = subprocess.list2cmdline(["--elevated-patch-ini", resolved])
+    else:
+        executable = sys.executable
+        params = subprocess.list2cmdline(["-m", "demolytics.main", "--elevated-patch-ini", resolved])
+    return executable, params
 
 
 def _shell_execute_runas(executable: str, parameters: str | None) -> int:
@@ -110,56 +95,28 @@ def _shell_execute_runas(executable: str, parameters: str | None) -> int:
         executable,
         parameters,
         None,
-        1,
+        _SW_HIDE,
     )
     return int(rc)
 
 
 def _launch_elevated_ini_patch(ini_path: Path, packet_send_rate: int = PACKET_SEND_RATE_TARGET) -> bool:
     """
-    Start a short-lived elevated subprocess that only patches the INI file.
-    Does not restart the main PyInstaller GUI.
+    Relaunch Demolytics with administrator rights to patch the INI in-process.
+    Avoids a TOCTOU window where a temp script on disk could be altered before UAC.
     """
+    del packet_send_rate  # Applied inside the elevated process via the same helper as normal writes.
     if os.name != "nt":
         return False
 
-    python_exe = _resolve_python_for_elevated_helper()
-    if not python_exe:
-        messagebox.showerror(
-            "Demolytics",
-            "Could not find Python on PATH (py / python). Use the manual steps, "
-            "or install the Python launcher and try again.",
-        )
-        return False
-
-    script_body = _elevated_patch_script_body(ini_path, packet_send_rate)
-    fd, tmp_path = tempfile.mkstemp(prefix="demolytics_stats_api_", suffix=".py")
-    os.close(fd)
-    tmp_file = Path(tmp_path)
-    try:
-        tmp_file.write_text(script_body, encoding="utf-8")
-    except OSError as exc:
-        LOGGER.exception("Could not write temporary patch script")
-        messagebox.showerror("Demolytics", f"Could not prepare elevated helper:\n{exc}")
-        return False
-
-    is_py_launcher = Path(python_exe).name.lower() in ("py.exe", "py")
-    if is_py_launcher:
-        params = f'-3 "{tmp_path}"'
-    else:
-        params = f'"{tmp_path}"'
-
-    rc = _shell_execute_runas(python_exe, params)
+    executable, params = _elevated_executable_and_parameters(ini_path)
+    rc = _shell_execute_runas(executable, params)
     if rc <= 32:
         messagebox.showerror(
             "Demolytics",
             f"Could not start elevated helper (ShellExecute returned {rc}). "
             "Try the manual steps instead.",
         )
-        try:
-            tmp_file.unlink(missing_ok=True)
-        except OSError:
-            LOGGER.warning("Could not delete temp script %s", tmp_file)
         return False
 
     messagebox.showinfo(
