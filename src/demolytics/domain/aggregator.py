@@ -5,6 +5,7 @@ import uuid
 import zlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from demolytics.domain.events import (
     GameState,
@@ -389,8 +390,9 @@ class MatchAccumulator:
 
 
 class DemolyticsAggregator:
-    def __init__(self, user_primary_id: str | None = None) -> None:
+    def __init__(self, user_primary_id: str | None = None, repository: Any = None) -> None:
         self.user_primary_id = user_primary_id
+        self.repository = repository
         self.active_session: SessionSnapshot | None = None
         self.current_match: MatchAccumulator | None = None
         self._status = "Waiting for Rocket League"
@@ -624,10 +626,25 @@ class DemolyticsAggregator:
             insight_salt = zlib.adler32(
                 f"{self.current_match.match_guid}|{sum(new_team_scores.values())}".encode()
             )
+            historical = None
+            if (
+                self.repository is not None
+                and self.user_primary_id
+                and inferred_mode in SUPPORTED_MODES
+            ):
+                try:
+                    historical = self.repository.fetch_rolling_goal_insight_baselines(
+                        self.user_primary_id,
+                        inferred_mode,
+                        exclude_match_guid=self.current_match.match_guid,
+                    )
+                except Exception:
+                    LOGGER.exception("Failed to load goal insight historical baselines")
             insight = compute_goal_insight(
                 live_players,
                 stat_seconds,
                 insight_salt=insight_salt,
+                historical=historical,
             )
             if insight is not None:
                 self._goal_insight = insight.message

@@ -84,7 +84,7 @@ class DemolyticsApp(ctk.CTk):
         super().__init__()
         self.settings = settings
         self.repository = repository
-        self.aggregator = DemolyticsAggregator()
+        self.aggregator = DemolyticsAggregator(repository=self.repository)
         self.event_queue: Queue[StatsEvent] = Queue()
         self.api_thread: StatsApiThread | None = None
         self.snapshot = self.aggregator.snapshot()

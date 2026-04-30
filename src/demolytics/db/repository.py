@@ -12,9 +12,18 @@ from demolytics.domain.aggregator import (
     PlayerStatsSnapshot,
     SessionSnapshot,
 )
+from demolytics.domain.goal_insight_stats import (
+    average_normalized_rows,
+    normalize_stats_for_goal_insight,
+)
+from demolytics.domain.goal_insights import HistoricalBaselines
 from demolytics.domain.stats import SUPPORTED_STAT_KEYS
 
 STAT_COLUMNS_SQL = ",\n".join(f"{key} REAL DEFAULT 0" for key in SUPPORTED_STAT_KEYS)
+
+
+def stats_dict_from_player_row(row: sqlite3.Row) -> dict[str, float]:
+    return {k: float(row[k] or 0) for k in SUPPORTED_STAT_KEYS}
 
 
 class DemolyticsRepository:
@@ -211,6 +220,103 @@ class DemolyticsRepository:
         session_id: str | None = None,
     ) -> dict[str, float]:
         return self._averages(is_user=True, game_mode=game_mode, session_id=session_id)
+
+    def fetch_rolling_goal_insight_baselines(
+        self,
+        user_primary_id: str,
+        game_mode: str,
+        *,
+        exclude_match_guid: str | None = None,
+        limit: int = 20,
+        min_matches: int = 3,
+    ) -> HistoricalBaselines | None:
+        """Trailing normalized averages for the user and opponents faced (same playlist only)."""
+        if not user_primary_id or not game_mode:
+            return None
+
+        exclude_sql = ""
+        params: list[Any] = [user_primary_id, game_mode]
+        if exclude_match_guid:
+            exclude_sql = "AND m.match_guid != ?"
+            params.append(exclude_match_guid)
+        params.append(limit)
+
+        with self.connect() as connection:
+            recent = connection.execute(
+                f"""
+                SELECT m.match_guid, m.duration_seconds
+                FROM matches m
+                INNER JOIN player_match_stats u
+                    ON u.match_guid = m.match_guid
+                    AND u.is_user = 1
+                    AND u.primary_id = ?
+                WHERE m.inferred_game_mode = ?
+                {exclude_sql}
+                ORDER BY m.timestamp DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        if len(recent) < min_matches:
+            return None
+
+        match_guids = [str(r["match_guid"]) for r in recent]
+        durations = {str(r["match_guid"]): float(r["duration_seconds"] or 0) for r in recent}
+        placeholders = ", ".join("?" for _ in match_guids)
+
+        with self.connect() as connection:
+            all_players = connection.execute(
+                f"""
+                SELECT p.*
+                FROM player_match_stats p
+                INNER JOIN matches m ON m.match_guid = p.match_guid
+                WHERE p.match_guid IN ({placeholders})
+                """,
+                match_guids,
+            ).fetchall()
+
+        by_match: dict[str, list[sqlite3.Row]] = {}
+        for prow in all_players:
+            mg = str(prow["match_guid"])
+            by_match.setdefault(mg, []).append(prow)
+
+        user_norm_rows: list[dict[str, float]] = []
+        opp_norm_rows: list[dict[str, float]] = []
+
+        for mg in match_guids:
+            plist = by_match.get(mg, [])
+            dur = max(durations.get(mg, 0.0), 1e-3)
+            user_row = next(
+                (
+                    p
+                    for p in plist
+                    if int(p["is_user"]) == 1 and str(p["primary_id"]) == user_primary_id
+                ),
+                None,
+            )
+            if user_row is None:
+                continue
+            ustats = stats_dict_from_player_row(user_row)
+            user_norm_rows.append(normalize_stats_for_goal_insight(ustats, dur))
+            ut = int(user_row["team_num"])
+            for p in plist:
+                if int(p["is_user"]) == 1:
+                    continue
+                if int(p["team_num"]) == ut:
+                    continue
+                ost = stats_dict_from_player_row(p)
+                opp_norm_rows.append(normalize_stats_for_goal_insight(ost, dur))
+
+        if len(user_norm_rows) < min_matches:
+            return None
+
+        return HistoricalBaselines(
+            user_rates=average_normalized_rows(user_norm_rows),
+            opponent_rates=average_normalized_rows(opp_norm_rows),
+            n_matches=len(user_norm_rows),
+            n_opponent_samples=len(opp_norm_rows),
+        )
 
     def get_global_baseline(self, game_mode: str | None = None) -> dict[str, float]:
         return self._averages(is_user=False, game_mode=game_mode)

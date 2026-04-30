@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 
 from demolytics.domain.aggregator import PlayerStatsSnapshot
-from demolytics.domain.goal_insights import MIN_LOBBY_SECONDS, compute_goal_insight
+from demolytics.domain.goal_insights import (
+    MIN_LOBBY_SECONDS,
+    HistoricalBaselines,
+    compute_goal_insight,
+)
 
 
 def _p(
@@ -241,6 +245,45 @@ class GoalInsightTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertNotIn("much more", result.message.lower())
+
+    def test_picks_opponents_when_demo_outlier_stronger_than_teammates(self) -> None:
+        """With teammates present, opponent branch must still run (not elif-only)."""
+        players = (
+            _p("1", "Mate", 0, demos_inflicted=1.0),
+            _p("2", "Me", 0, demos_inflicted=8.0, is_user=True),
+            _p("3", "O1", 1, demos_inflicted=0.0),
+            _p("4", "O2", 1, demos_inflicted=0.0),
+        )
+        result = compute_goal_insight(players, 30.0)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.peer_group, "opponents")
+        self.assertIn("demos inflicted", result.message.lower())
+
+    def test_historical_self_outlier_when_passed(self) -> None:
+        """Normalized historical baseline vs live raw display."""
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        players = (
+            _p("1", "Me", 0, time_zero_boost=120.0, is_user=True),
+            _p("2", "Opp", 1, time_zero_boost=10.0),
+        )
+        user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        user_rates.update({"time_zero_boost": 0.2, "avg_boost": 50.0, "shooting_percentage": 25.0})
+        opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        opp_rates.update({"time_zero_boost": 1.8, "avg_boost": 50.0, "shooting_percentage": 25.0})
+        hist = HistoricalBaselines(
+            user_rates=user_rates,
+            opponent_rates=opp_rates,
+            n_matches=5,
+            n_opponent_samples=5,
+        )
+        result = compute_goal_insight(players, 60.0, historical=hist)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.kind, "outlier")
+        self.assertEqual(result.peer_group, "historical_self")
+        self.assertIn("0 boost", result.message.lower())
 
     def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
         players = (
