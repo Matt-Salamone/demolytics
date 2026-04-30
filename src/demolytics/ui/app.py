@@ -53,11 +53,22 @@ _BALLCHASING_NO_REPLAY_SNACKBAR = (
     "Could not find a replay for Ballchasing. Make sure you are saving the replay from the post-match menu."
 )
 
+_GLANCE_CARD_MIN_HEIGHT = 100
+
 
 def _normalize_playlist_mode(mode: str) -> str:
     if mode in STANDARD_PLAYLIST_MODES:
         return mode
     return "1v1"
+
+
+def _live_playlist_mode(snapshot: DashboardSnapshot) -> str | None:
+    """Playlist for the active session or current match, if known."""
+    if snapshot.session and snapshot.session.game_mode in STANDARD_PLAYLIST_MODES:
+        return _normalize_playlist_mode(snapshot.session.game_mode)
+    if snapshot.current_game_mode in STANDARD_PLAYLIST_MODES:
+        return snapshot.current_game_mode
+    return None
 
 
 GLANCE_ICONS: dict[str, str] = {
@@ -139,6 +150,7 @@ class DemolyticsApp(ctk.CTk):
         self.history_rows: list[ctk.CTkFrame] = []
         self.encounter_rows: list[ctk.CTkFrame] = []
         self._comparison_mode_var = StringVar(value=_normalize_playlist_mode(settings.comparison_game_mode))
+        self._last_auto_sync_live_mode: str | None = None
         self._replay_created_stash: dict[str, dict[str, Any]] = {}
         self._ballchasing_queue: Queue[dict[str, Any]] = Queue()
         self._ballchasing_worker_thread: threading.Thread | None = None
@@ -343,18 +355,20 @@ class DemolyticsApp(ctk.CTk):
         self.glance_goal_insight_label.grid(row=0, column=0, sticky="ew", padx=14, pady=12)
         insight_wrap.bind("<Configure>", self._on_glance_insight_wrap_configure)
 
-        stats_area = ctk.CTkFrame(self.glance_tab, fg_color="transparent")
+        stats_area = ctk.CTkScrollableFrame(self.glance_tab, fg_color="transparent")
         stats_area.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
+        stats_area.grid_columnconfigure(0, weight=1, minsize=120)
+        stats_area.grid_columnconfigure(1, weight=1, minsize=120)
         max_cols = 2
         col = row = 0
         self.glance_value_labels.clear()
         for stat_key in self.settings.glance_stats:
             if stat_key not in GLANCE_STAT_KEYS:
                 continue
-            stats_area.grid_rowconfigure(row, weight=1)
-            stats_area.grid_columnconfigure(col, weight=1)
-            cell = ctk.CTkFrame(stats_area, fg_color=("gray85", "gray20"), corner_radius=12)
-            cell.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+            stats_area.grid_rowconfigure(row, weight=0, minsize=_GLANCE_CARD_MIN_HEIGHT + 20)
+            cell = ctk.CTkFrame(stats_area, fg_color=("gray85", "gray20"), corner_radius=12, height=_GLANCE_CARD_MIN_HEIGHT)
+            cell.grid(row=row, column=col, sticky="ew", padx=10, pady=10)
+            cell.grid_propagate(False)
             icon = GLANCE_ICONS.get(stat_key, "📊")
             ctk.CTkLabel(
                 cell,
@@ -461,26 +475,48 @@ class DemolyticsApp(ctk.CTk):
         self._refresh_stats_tab(self.snapshot)
 
     def _build_live_match_panel(self, parent: ctk.CTkFrame) -> None:
-        """Live Match: You and Teams side by side."""
+        """Live Match: You and Teams side by side; optional playlist mismatch message."""
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_columnconfigure(1, weight=1)
         parent.grid_rowconfigure(1, weight=1)
 
         title_font = ctk.CTkFont(size=15, weight="bold")
-        ctk.CTkLabel(parent, text="You", font=title_font, anchor="w").grid(
-            row=0, column=0, sticky="w", padx=8, pady=(8, 4)
-        )
-        ctk.CTkLabel(parent, text="Teams", font=title_font, anchor="w").grid(
-            row=0, column=1, sticky="w", padx=8, pady=(8, 4)
-        )
+        self._live_match_header_you = ctk.CTkLabel(parent, text="You", font=title_font, anchor="w")
+        self._live_match_header_you.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+        self._live_match_header_teams = ctk.CTkLabel(parent, text="Teams", font=title_font, anchor="w")
+        self._live_match_header_teams.grid(row=0, column=1, sticky="w", padx=8, pady=(8, 4))
 
-        personal_scroll = ctk.CTkScrollableFrame(parent)
-        personal_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._live_match_stats_wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        self._live_match_stats_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=(0, 8))
+        self._live_match_stats_wrap.grid_columnconfigure(0, weight=1)
+        self._live_match_stats_wrap.grid_columnconfigure(1, weight=1)
+        self._live_match_stats_wrap.grid_rowconfigure(0, weight=1)
+
+        personal_scroll = ctk.CTkScrollableFrame(self._live_match_stats_wrap)
+        personal_scroll.grid(row=0, column=0, sticky="nsew", padx=8, pady=0)
         personal_scroll.grid_columnconfigure(1, weight=1)
 
-        teams_scroll = ctk.CTkScrollableFrame(parent)
-        teams_scroll.grid(row=1, column=1, sticky="nsew", padx=8, pady=(0, 8))
+        teams_scroll = ctk.CTkScrollableFrame(self._live_match_stats_wrap)
+        teams_scroll.grid(row=0, column=1, sticky="nsew", padx=8, pady=0)
         teams_scroll.grid_columnconfigure(1, weight=1)
+
+        self._live_match_mismatch_wrap = ctk.CTkFrame(parent, fg_color=("gray88", "gray22"), corner_radius=8)
+        self._live_match_mismatch_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=8, pady=(0, 8))
+        self._live_match_mismatch_wrap.grid_columnconfigure(0, weight=1)
+        self._live_match_mismatch_wrap.grid_rowconfigure(0, weight=1)
+        self._live_match_mismatch_label = ctk.CTkLabel(
+            self._live_match_mismatch_wrap,
+            text=(
+                "Select the playlist that matches your current match above to view live stats "
+                "for this session."
+            ),
+            font=ctk.CTkFont(size=14),
+            wraplength=520,
+            justify="center",
+            text_color=("gray30", "gray75"),
+        )
+        self._live_match_mismatch_label.grid(row=0, column=0, sticky="nsew", padx=16, pady=24)
+        self._live_match_mismatch_wrap.grid_remove()
 
         self.stat_live_personal_labels.clear()
         self.stat_live_team_labels.clear()
@@ -916,33 +952,54 @@ class DemolyticsApp(ctk.CTk):
             self.mode_label.configure(text=f"Mode: {snapshot.current_game_mode}")
             session_id = None
 
-        inferred: str | None = None
-        if snapshot.session:
-            inferred = snapshot.session.game_mode
-        elif snapshot.current_game_mode != "unknown":
-            inferred = snapshot.current_game_mode
-        if inferred in STANDARD_PLAYLIST_MODES and inferred != self.settings.comparison_game_mode:
-            self.settings.comparison_game_mode = inferred
-            self._comparison_mode_var.set(inferred)
-            save_settings(self.settings)
+        live_pl = _live_playlist_mode(snapshot)
+        if live_pl is not None:
+            if live_pl != self._last_auto_sync_live_mode:
+                self._last_auto_sync_live_mode = live_pl
+                if self.settings.comparison_game_mode != live_pl:
+                    self.settings.comparison_game_mode = live_pl
+                    self._comparison_mode_var.set(live_pl)
+                    save_settings(self.settings)
 
         comparison_mode = _normalize_playlist_mode(self._comparison_mode_var.get())
 
-        for stat_key, label in self.stat_live_personal_labels.items():
-            user_val = snapshot.live_user_stats.get(stat_key)
-            label.configure(text=_format_stat(stat_key, user_val), justify="right")
+        live_mismatch = live_pl is not None and comparison_mode != live_pl
+        stats_wrap = getattr(self, "_live_match_stats_wrap", None)
+        mismatch_wrap = getattr(self, "_live_match_mismatch_wrap", None)
+        header_you = getattr(self, "_live_match_header_you", None)
+        header_teams = getattr(self, "_live_match_header_teams", None)
+        if stats_wrap is not None and mismatch_wrap is not None:
+            if live_mismatch:
+                stats_wrap.grid_remove()
+                mismatch_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=(0, 8))
+                if header_you is not None:
+                    header_you.grid_remove()
+                if header_teams is not None:
+                    header_teams.grid_remove()
+            else:
+                mismatch_wrap.grid_remove()
+                stats_wrap.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=(0, 8))
+                if header_you is not None:
+                    header_you.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+                if header_teams is not None:
+                    header_teams.grid(row=0, column=1, sticky="w", padx=8, pady=(8, 4))
 
-        for stat_key, label in self.stat_live_team_labels.items():
-            inner = team_stat_suffix(stat_key)
-            lines: list[str] = []
-            for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
-                team_label = team.team_name or f"Team {team.team_num}"
-                tv = team.stats.get(inner)
-                lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
-            label.configure(
-                text="\n".join(lines) if lines else "--",
-                justify="right",
-            )
+        if not live_mismatch:
+            for stat_key, label in self.stat_live_personal_labels.items():
+                user_val = snapshot.live_user_stats.get(stat_key)
+                label.configure(text=_format_stat(stat_key, user_val), justify="right")
+
+            for stat_key, label in self.stat_live_team_labels.items():
+                inner = team_stat_suffix(stat_key)
+                lines: list[str] = []
+                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
+                    team_label = team.team_name or f"Team {team.team_num}"
+                    tv = team.stats.get(inner)
+                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
+                label.configure(
+                    text="\n".join(lines) if lines else "--",
+                    justify="right",
+                )
 
         session_averages = self.repository.get_user_averages(
             game_mode=comparison_mode,
@@ -1410,6 +1467,7 @@ class DemolyticsApp(ctk.CTk):
         self.stats_session_scope_label = None
         self.stats_global_scope_label = None
         self._comparison_mode_var.set(_normalize_playlist_mode(self.settings.comparison_game_mode))
+        self._last_auto_sync_live_mode = _live_playlist_mode(self.snapshot)
         self._build_stats_tab()
         self._refresh_stats_tab(self.snapshot)
 

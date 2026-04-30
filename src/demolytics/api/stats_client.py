@@ -47,7 +47,7 @@ class StatsApiClient:
         self._stop_requested = True
 
     async def _run_plain_tcp_session(self) -> None:
-        self._emit_status(f"connecting tcp json to {self.host}:{self.port}")
+        LOGGER.debug("Stats API: opening TCP JSON stream to %s:%s", self.host, self.port)
         reader, writer = await asyncio.open_connection(
             self.host,
             self.port,
@@ -92,7 +92,7 @@ class StatsApiClient:
                 continue
 
             try:
-                self._emit_status(f"connecting to {self.uri}")
+                LOGGER.debug("Stats API: opening WebSocket %s", self.uri)
                 # Never use a system HTTP/SOCKS proxy for loopback. Some embedded WS
                 # stacks expect Origin; AF_INET avoids odd dual-stack loopback paths.
                 async with websockets.connect(

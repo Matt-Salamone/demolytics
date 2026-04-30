@@ -431,6 +431,7 @@ class DemolyticsAggregator:
         self._block_derived_stats = True
         self._frozen_user_stats_between_matches: dict[str, float] | None = None
         self._frozen_user_team_stats: dict[str, float] | None = None
+        self._frozen_live_teams_between_matches: tuple[TeamStatsSnapshot, ...] | None = None
         self._session_outcome_recorded_for: set[str] = set()
         self._goal_insight: str | None = None
         self._prev_team_scores: dict[int, int] = {}
@@ -447,6 +448,7 @@ class DemolyticsAggregator:
         self._block_derived_stats = True
         self._frozen_user_stats_between_matches = None
         self._frozen_user_team_stats = None
+        self._frozen_live_teams_between_matches = None
         self._session_outcome_recorded_for = set()
         self._goal_insight = None
         self._prev_team_scores = {}
@@ -469,6 +471,7 @@ class DemolyticsAggregator:
             )
         self._frozen_user_stats_between_matches = None
         self._frozen_user_team_stats = None
+        self._frozen_live_teams_between_matches = None
 
     def handle_event(
         self,
@@ -537,6 +540,14 @@ class DemolyticsAggregator:
                 user_team_stats = dict(self._frozen_user_team_stats)
         elif self._frozen_user_stats_between_matches is not None:
             live_user_stats = dict(self._frozen_user_stats_between_matches)
+            if (
+                not live_teams
+                and self._frozen_live_teams_between_matches is not None
+                and len(self._frozen_live_teams_between_matches) > 0
+            ):
+                live_teams = self._frozen_live_teams_between_matches
+        if self.current_match is None and not live_teams and self._frozen_live_teams_between_matches:
+            live_teams = self._frozen_live_teams_between_matches
         if (
             self.current_match is None
             and not user_team_stats
@@ -562,6 +573,7 @@ class DemolyticsAggregator:
         self.active_session = None
         self._frozen_user_stats_between_matches = None
         self._frozen_user_team_stats = None
+        self._frozen_live_teams_between_matches = None
         self._goal_insight = None
         self._status = "Session ended"
 
@@ -593,6 +605,9 @@ class DemolyticsAggregator:
                     )
                     if ut is not None:
                         self._frozen_user_team_stats = dict(ut.stats)
+                    self._frozen_live_teams_between_matches = tuple(
+                        self.current_match.team_snapshots(self.user_primary_id)
+                    )
             self.current_match = MatchAccumulator(match_guid=match_guid, timestamp=now)
             self._paused_until_kickoff = False
             self._last_team_score_sum = None
@@ -834,6 +849,9 @@ class DemolyticsAggregator:
                         break
                 if frozen_team_stats is not None:
                     self._frozen_user_team_stats = frozen_team_stats
+                self._frozen_live_teams_between_matches = tuple(
+                    self.current_match.team_snapshots(self.user_primary_id)
+                )
             self.current_match = None
             self._paused_until_kickoff = False
             self._last_team_score_sum = None
@@ -872,6 +890,7 @@ class DemolyticsAggregator:
 
         self._frozen_user_stats_between_matches = None
         self._frozen_user_team_stats = None
+        self._frozen_live_teams_between_matches = None
         self.active_session = SessionSnapshot(
             session_id=str(uuid.uuid4()),
             game_mode=game_mode,
