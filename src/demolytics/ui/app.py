@@ -72,6 +72,8 @@ _STATS_LIVE_MATCH_PAIR_MAX_WIDTH = 2 * _TAB_CONTENT_MAX_WIDTH
 _STATS_CONTENT_PANEL_PAD = 12
 # Live Match team column: RL hides opposing car telemetry so we show this instead of zeros.
 LIVE_MATCH_UNAVAILABLE = "Unavailable"
+# CTkLabel.configure rejects text_color=None; use explicit theme-style defaults for normal values.
+_LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR = ("gray10", "gray90")
 # Main CTkTabview: slightly wider than the widest inner content max so the tab chrome fits with padding.
 _TAB_VIEW_OUTER_PADDING = 56
 _TAB_VIEW_MAX_OUTER_WIDTH = (
@@ -960,7 +962,11 @@ class DemolyticsApp(ctk.CTk):
 
         if n == 0:
             _, value0 = pairs[0]
-            value0.configure(text="--", font=self._live_team_value_font_bold, text_color=None)
+            value0.configure(
+                text="--",
+                font=self._live_team_value_font_bold,
+                text_color=_LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR,
+            )
             return
 
         for i, team in enumerate(teams_sorted):
@@ -980,7 +986,7 @@ class DemolyticsApp(ctk.CTk):
                 value_lbl.configure(
                     text=display,
                     font=self._live_team_value_font_bold,
-                    text_color=None,
+                    text_color=_LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR,
                 )
 
     def _build_history_tab(self) -> None:
