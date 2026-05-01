@@ -4,8 +4,8 @@ import unittest
 
 from demolytics.domain.aggregator import PlayerStatsSnapshot
 from demolytics.domain.goal_insights import (
-    HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS,
     MIN_LOBBY_SECONDS,
+    OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS,
     HistoricalBaselines,
     compute_goal_insight,
 )
@@ -304,8 +304,41 @@ class GoalInsightTests(unittest.TestCase):
         result = compute_goal_insight(players, 60.0, historical=hist)
         self.assertIsNotNone(result)
         assert result is not None
-        if result.stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
+        if result.stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
             self.assertNotEqual(result.peer_group, "historical_opponents")
+
+    def test_historical_opponents_never_airborne_even_if_baseline_saturated(self) -> None:
+        """Opponent rolling airborne is not trustworthy (wheel contact SPECTATOR); skip vs historical_opponents."""
+        from demolytics.domain.stats import SUPPORTED_STAT_KEYS
+
+        players = (
+            _p(
+                "1",
+                "Me",
+                0,
+                is_user=True,
+                time_on_ground=100.0,
+                time_airborne=50.0,
+                airborne_percentage=35.0,
+            ),
+            _p("2", "Opp", 1, time_on_ground=50.0, time_airborne=50.0, airborne_percentage=50.0),
+        )
+        user_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        user_rates["airborne_percentage"] = 0.4
+        opp_rates = {k: 0.0 for k in SUPPORTED_STAT_KEYS}
+        opp_rates["airborne_percentage"] = 1.0
+        hist = HistoricalBaselines(
+            user_rates=user_rates,
+            opponent_rates=opp_rates,
+            n_matches=5,
+            n_opponent_samples=5,
+        )
+        result = compute_goal_insight(players, 60.0, historical=hist)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(
+            result.peer_group == "historical_opponents" and result.stat_key == "airborne_percentage",
+        )
 
     def test_historical_opponents_never_avg_speed_even_if_baseline_zero(self) -> None:
         """Rolling opponent avg_speed is often ~0 without telemetry; must not drive historical_opponents lines."""
@@ -334,18 +367,28 @@ class GoalInsightTests(unittest.TestCase):
             result.peer_group == "historical_opponents" and result.stat_key == "avg_speed",
         )
 
-    def test_airborne_outlier_still_works_when_ground_visible_for_all(self) -> None:
+    def test_airborne_outlier_still_works_vs_teammates_when_ground_visible(self) -> None:
+        """Airborne comparisons vs teammates remain valid when wheel contact exists for everyone."""
         players = (
             _p(
                 "1",
+                "Mate",
+                0,
+                time_on_ground=100.0,
+                time_airborne=10.0,
+                airborne_percentage=9.0,
+            ),
+            _p(
+                "2",
                 "Me",
                 0,
                 is_user=True,
                 time_on_ground=100.0,
                 time_airborne=10.0,
+                airborne_percentage=2.0,
             ),
             _p(
-                "2",
+                "3",
                 "Opp",
                 1,
                 time_on_ground=50.0,
@@ -357,6 +400,7 @@ class GoalInsightTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIn("airborne", result.message.lower())
+        self.assertEqual(result.peer_group, "teammates")
 
 
 if __name__ == "__main__":

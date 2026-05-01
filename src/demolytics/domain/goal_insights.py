@@ -21,25 +21,27 @@ OUTLIER_SEPARATION = 1.5
 # Rocket League often omits on-ground state for other cars; without ground time, airborne % is meaningless.
 MIN_VISIBLE_GROUND_SECONDS = 0.5
 
-# Opponent cars often lack real Boost in the plugin payload; comparing these vs opponents is misleading.
-BOOST_DERIVED_STAT_KEYS = frozenset({"avg_boost"})
-# Rolling opponent baselines from the DB average many matches where speed/boost were never exposed for other cars.
-HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS = frozenset({"avg_boost", "avg_speed"})
+# Online, opposing cars do not receive local car telemetry in the RL/Bakkes plugin (fields are tagged
+# SPECTATOR-only) so boost, speed, wheel contact (bOnGround), boosting, supersonic, powerslide, etc.
+# are not meaningful for opponents. Teammates still get these fields. Exclude them from after-goal
+# comparisons vs opponents (live and historical_opponents); mixed-lobby fallbacks use teammates only.
+OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS: frozenset[str] = frozenset(
+    {
+        "avg_boost",
+        "time_zero_boost",
+        "time_full_boost",
+        "avg_speed",
+        "time_boosting",
+        "time_supersonic",
+        "time_powerslide",
+        "time_on_ground",
+        "time_airborne",
+        "airborne_percentage",
+    }
+)
 
 # Integer stats: treat ±1–2 demo differences as noise (e.g. 2 vs 1); require gap > this threshold.
 MIN_DEMO_COUNT_GAP_FOR_OUTLIER = 2
-
-# Opponent row looks like missing boost telemetry (do not use for boost-derived medians / fallbacks).
-def _opponent_boost_row_unreliable(p: _PlayerStatsLike, user_team: int) -> bool:
-    if p.team_num == user_team:
-        return False
-    return float(p.stats.get("avg_boost", 0.0)) <= 1e-6
-
-
-def _opponent_speed_row_unreliable(p: _PlayerStatsLike, user_team: int) -> bool:
-    if p.team_num == user_team:
-        return False
-    return float(p.stats.get("avg_speed", 0.0)) <= 1e-3
 
 
 _FALLBACK_STAT_KEYS = (
@@ -136,15 +138,15 @@ def _fallback_eligible_peer_values(
     lobby_peers: tuple[_PlayerStatsLike, ...],
 ) -> list[float] | None:
     """Peer values for lobby median, or None if this stat is not comparable for the lobby."""
-    if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, lobby_peers):
-        return None
-    out: list[float] = []
-    for p in lobby_peers:
-        if stat_key in BOOST_DERIVED_STAT_KEYS and _opponent_boost_row_unreliable(p, user.team_num):
-            continue
-        if stat_key == "avg_speed" and _opponent_speed_row_unreliable(p, user.team_num):
-            continue
-        out.append(float(p.stats.get(stat_key, 0.0)))
+    if stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
+        mates = tuple(p for p in lobby_peers if p.team_num == user.team_num)
+        if not mates:
+            return None
+        if stat_key == "airborne_percentage" and not _airborne_comparison_trustworthy(user, mates):
+            return None
+        out = [float(p.stats.get(stat_key, 0.0)) for p in mates]
+        return out if out else None
+    out = [float(p.stats.get(stat_key, 0.0)) for p in lobby_peers]
     return out if out else None
 
 
@@ -266,7 +268,7 @@ def _historical_outliers(
             if peer_group == "historical_opponents":
                 if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
                     continue
-                if stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
+                if stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
                     continue
             med_n = float(baseline.get(stat_key, 0.0))
             sep, direction = _smoothed_separation(uv_n, med_n)
@@ -324,7 +326,7 @@ def _historical_fallback_insight(
             if peer_group == "historical_opponents":
                 if historical.n_opponent_samples < MIN_HISTORICAL_OPPONENT_SAMPLES:
                     continue
-                if stat_key in HISTORICAL_OPPONENT_UNRELIABLE_STAT_KEYS:
+                if stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
                     continue
             med_display = denormalize_stat_for_display(stat_key, med_n, match_duration_seconds)
             dist = abs(uv_n - med_n)
@@ -427,15 +429,9 @@ def _user_vs_peer_median_outliers(
     peer_phrase = _peer_high_phrase(same_team, len(peers))
 
     for stat_key in ("demos_inflicted", "demos_taken", "touches", "avg_speed"):
-        if peer_group == "opponents" and stat_key in BOOST_DERIVED_STAT_KEYS:
+        if peer_group == "opponents" and stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
             continue
-        values: list[float] = []
-        for p in peers:
-            if stat_key == "avg_speed" and peer_group == "opponents" and _opponent_speed_row_unreliable(
-                p, user.team_num
-            ):
-                continue
-            values.append(float(p.stats.get(stat_key, 0.0)))
+        values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         if not values:
             continue
         med = _median(values)
@@ -445,7 +441,7 @@ def _user_vs_peer_median_outliers(
         )
 
     stat_key = "airborne_percentage"
-    if _airborne_comparison_trustworthy(user, peers):
+    if peer_group != "opponents" and _airborne_comparison_trustworthy(user, peers):
         values = [float(p.stats.get(stat_key, 0.0)) for p in peers]
         med = _median(values)
         uv = float(user.stats.get(stat_key, 0.0))
@@ -537,10 +533,20 @@ def _fallback_user_insight(
             )
     else:
         peer_group = "teammates"
-        msg = (
-            f"Your {label.lower()} ({_fmt(stat_key, uv)}) is near the lobby's "
-            f"typical mark (median {_fmt(stat_key, med)})."
-        )
+        if stat_key in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
+            med_note = (
+                f"median {_fmt(stat_key, med)}" if n_mate > 1 else f"their {_fmt(stat_key, med)}"
+            )
+            who = "teammates'" if n_mate > 1 else "teammate's"
+            msg = (
+                f"Your {label.lower()} ({_fmt(stat_key, uv)}) is close to your {who} "
+                f"typical level ({med_note})."
+            )
+        else:
+            msg = (
+                f"Your {label.lower()} ({_fmt(stat_key, uv)}) is near the lobby's "
+                f"typical mark (median {_fmt(stat_key, med)})."
+            )
     return GoalInsightResult(
         message=msg,
         stat_key=stat_key,

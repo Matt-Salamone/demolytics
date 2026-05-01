@@ -4,8 +4,6 @@ Demolytics is a powerful, local-first Rocket League statistics tracker and dashb
 
 ## 📸 Screenshots
 
-*(Replace these placeholder links with actual images of your app)*
-
 ![Dashboard / Glance Stats](docs/screenshots/dashboard.png)
 > **Dashboard:** Quick glance at your current session record, win streaks, and automated post-goal insights.
 
