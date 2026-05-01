@@ -7,6 +7,7 @@ import webbrowser
 from datetime import datetime
 from queue import Queue
 from tkinter import BooleanVar, StringVar, messagebox
+from collections.abc import Iterable
 from typing import Any
 
 import customtkinter as ctk
@@ -22,7 +23,9 @@ from demolytics.domain.aggregator import (
     DashboardSnapshot,
     DemolyticsAggregator,
     PlayerStatsSnapshot,
+    TeamStatsSnapshot,
 )
+from demolytics.domain.goal_insights import OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS
 from demolytics.domain.events import MatchLifecycleEvent, StatsEvent
 from demolytics.domain.stats import (
     DEFAULT_STATS_TAB_VISIBLE,
@@ -85,6 +88,12 @@ def _normalize_playlist_mode(mode: str) -> str:
     if mode in STANDARD_PLAYLIST_MODES:
         return mode
     return "1v1"
+
+
+def _stats_tab_stat_row_order(visible_stats: Iterable[str], allowed_keys: frozenset[str]) -> list[str]:
+    """Order enabled stats alphabetically by label for the Stats tab subtabs."""
+    picked = [k for k in visible_stats if k in allowed_keys]
+    return sorted(picked, key=lambda k: (STAT_LABELS.get(k, k).lower(), k))
 
 
 def _live_playlist_mode(snapshot: DashboardSnapshot) -> str | None:
@@ -600,9 +609,7 @@ class DemolyticsApp(ctk.CTk):
             body_max_width=_TAB_CONTENT_MAX_WIDTH,
         )
 
-        for stat_key in self.settings.visible_stats:
-            if stat_key not in SUPPORTED_STAT_KEYS:
-                continue
+        for stat_key in _stats_tab_stat_row_order(self.settings.visible_stats, frozenset(SUPPORTED_STAT_KEYS)):
             self.session_average_labels[stat_key] = self._stat_row(
                 session_frame,
                 STAT_LABELS[stat_key],
@@ -791,9 +798,7 @@ class DemolyticsApp(ctk.CTk):
 
         has_personal = False
         has_team = False
-        for stat_key in self.settings.visible_stats:
-            if stat_key not in STATS_TAB_COLUMN_KEYS:
-                continue
+        for stat_key in _stats_tab_stat_row_order(self.settings.visible_stats, STATS_TAB_COLUMN_KEYS):
             if stat_key.startswith("team_"):
                 has_team = True
                 self.stat_live_team_labels[stat_key] = self._stat_row(
@@ -1303,7 +1308,9 @@ class DemolyticsApp(ctk.CTk):
                 for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
                     team_label = team.team_name or f"Team {team.team_num}"
                     tv = team.stats.get(inner)
-                    lines.append(f"{team_label}: {_format_stat(stat_key, tv)}")
+                    lines.append(
+                        f"{team_label}: {_format_live_match_team_stat(stat_key, team, tv)}"
+                    )
                 label.configure(
                     text="\n".join(lines) if lines else "--",
                     justify="right",
@@ -1530,9 +1537,11 @@ class DemolyticsApp(ctk.CTk):
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
         variables: dict[str, BooleanVar] = {}
-        for stat in STAT_DEFINITIONS:
-            if not stat.supported:
-                continue
+        personal_defs = sorted(
+            (s for s in STAT_DEFINITIONS if s.supported),
+            key=lambda s: (s.label.lower(), s.key),
+        )
+        for stat in personal_defs:
             variable = BooleanVar(value=stat.key in self.settings.visible_stats)
             checkbox = ctk.CTkCheckBox(cols_scroll, text=stat.label, variable=variable)
             checkbox.pack(anchor="w", padx=8, pady=3)
@@ -1554,9 +1563,11 @@ class DemolyticsApp(ctk.CTk):
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
-        for stat in STAT_DEFINITIONS:
-            if not stat.key.startswith("team_"):
-                continue
+        team_defs = sorted(
+            (s for s in STAT_DEFINITIONS if s.key.startswith("team_")),
+            key=lambda s: (s.label.lower(), s.key),
+        )
+        for stat in team_defs:
             variable = BooleanVar(value=stat.key in self.settings.visible_stats)
             checkbox = ctk.CTkCheckBox(cols_scroll, text=stat.label, variable=variable)
             checkbox.pack(anchor="w", padx=8, pady=3)
@@ -1834,6 +1845,19 @@ def _stats_comparison_scope_caption(
 
 def _format_comparison(stat_key: str, left: float | None, right: float | None) -> str:
     return f"{_format_stat(stat_key, left)} / {_format_stat(stat_key, right)}"
+
+
+def _format_live_match_team_stat(
+    stat_key: str,
+    team: TeamStatsSnapshot,
+    value: float | None,
+) -> str:
+    """Opposing teams omit SPECTATOR-only car telemetry in online play; do not show misleading zeros."""
+    if not team.is_user_team:
+        base = team_stat_suffix(stat_key) if stat_key.startswith("team_") else stat_key
+        if base in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
+            return "Unavailable"
+    return _format_stat(stat_key, value)
 
 
 def _glance_stat_raw(snapshot: DashboardSnapshot, stat_key: str) -> float | None:
