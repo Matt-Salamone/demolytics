@@ -513,11 +513,21 @@ class AggregatorTests(unittest.TestCase):
         )
         frozen = aggregator.snapshot().live_user_stats.get("goals")
         self.assertEqual(frozen, live_goals)
+        frozen_team_goals = tuple(
+            t.stats.get("goals", 0.0) for t in sorted(aggregator.snapshot().live_teams, key=lambda x: x.team_num)
+        )
+        self.assertEqual(len(frozen_team_goals), 2)
         aggregator.handle_event(
             MatchLifecycleEvent(event_name="MatchInitialized", match_guid="MATCH-2"),
             datetime(2026, 1, 1, 0, 6, tzinfo=UTC),
         )
         self.assertEqual(aggregator.snapshot().live_user_stats.get("goals"), frozen)
+        snap_after_init = aggregator.snapshot()
+        self.assertEqual(len(snap_after_init.live_teams), 2)
+        self.assertEqual(
+            tuple(t.stats.get("goals", 0.0) for t in sorted(snap_after_init.live_teams, key=lambda x: x.team_num)),
+            frozen_team_goals,
+        )
 
     def test_user_inferred_when_only_one_player_has_speed_and_boost(self) -> None:
         """RL often omits car telemetry for remote players; the local client is usually the only fully sampled car."""

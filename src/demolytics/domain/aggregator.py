@@ -519,6 +519,17 @@ class DemolyticsAggregator:
             current_game_mode = self.current_match.game_mode
             live_players = self.current_match.snapshots(self.user_primary_id)
             live_teams = self.current_match.team_snapshots(self.user_primary_id)
+            frozen_teams = self._frozen_live_teams_between_matches
+            prefer_frozen_live_teams = (
+                frozen_teams is not None
+                and len(frozen_teams) > 0
+                and self._block_derived_stats
+                and (not self.current_match.multiplayer_seen or len(live_players) < 2)
+            )
+            if prefer_frozen_live_teams:
+                live_teams = frozen_teams
+            elif frozen_teams is not None and len(frozen_teams) > 0 and not live_teams:
+                live_teams = frozen_teams
             user_snapshot = next((player for player in live_players if player.is_user), None)
             prefer_frozen_live = (
                 self._frozen_user_stats_between_matches is not None
