@@ -119,7 +119,9 @@ class PlayerAccumulator:
     time_supersonic: float = 0.0
     time_powerslide: float = 0.0
     time_on_ground: float = 0.0
+    time_on_wall: float = 0.0
     time_airborne: float = 0.0
+    crossbar_hits: int = 0
 
     def apply_update(
         self,
@@ -172,6 +174,8 @@ class PlayerAccumulator:
                 treat_none_on_ground_as_air and player.on_ground is None
             ):
                 self.time_airborne += delta_seconds
+            if player.on_wall is True:
+                self.time_on_wall += delta_seconds
 
         demolished = bool(player.demolished)
         if demolished and not self.last_demolished:
@@ -214,8 +218,10 @@ class PlayerAccumulator:
             "time_supersonic": self.time_supersonic,
             "time_powerslide": self.time_powerslide,
             "time_on_ground": self.time_on_ground,
+            "time_on_wall": self.time_on_wall,
             "time_airborne": self.time_airborne,
             "airborne_percentage": _airborne_percentage(self.time_airborne, self.time_on_ground),
+            "crossbar_hits": float(self.crossbar_hits),
         }
         return PlayerStatsSnapshot(
             match_guid=self.match_guid,
@@ -354,7 +360,9 @@ class MatchAccumulator:
             time_supersonic = sum(p.time_supersonic for p in mates)
             time_powerslide = sum(p.time_powerslide for p in mates)
             time_on_ground = sum(p.time_on_ground for p in mates)
+            time_on_wall = sum(p.time_on_wall for p in mates)
             time_airborne = sum(p.time_airborne for p in mates)
+            crossbar_hits = sum(p.crossbar_hits for p in mates)
             opposing_score = max(
                 (t.score for t in self.teams.values() if t.team_num != team_num),
                 default=0,
@@ -382,8 +390,10 @@ class MatchAccumulator:
                 "time_supersonic": time_supersonic,
                 "time_powerslide": time_powerslide,
                 "time_on_ground": time_on_ground,
+                "time_on_wall": time_on_wall,
                 "time_airborne": time_airborne,
                 "airborne_percentage": _airborne_percentage(time_airborne, time_on_ground),
+                "crossbar_hits": float(crossbar_hits),
             }
             out.append(
                 TeamStatsSnapshot(
@@ -841,9 +851,18 @@ class DemolyticsAggregator:
         return None
 
     def _handle_statfeed(self, event: StatfeedEvent) -> None:
-        if self.current_match is None or event.stat_type.lower() != "demolition":
+        if self.current_match is None:
             return
         if self._block_derived_stats:
+            return
+
+        if event.stat_name.lower() == "crossbarhit":
+            scorer = self.current_match.player_by_ref(event.main_target)
+            if scorer is not None:
+                scorer.crossbar_hits += 1
+            return
+
+        if event.stat_type.lower() != "demolition":
             return
         if len(self.current_match.players) <= 1:
             return

@@ -35,6 +35,7 @@ OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS: frozenset[str] = frozenset(
         "time_supersonic",
         "time_powerslide",
         "time_on_ground",
+        "time_on_wall",
         "time_airborne",
         "airborne_percentage",
     }

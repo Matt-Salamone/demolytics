@@ -17,6 +17,7 @@ from demolytics.domain.events import (
     MatchLifecycleEvent,
     PlayerRef,
     PlayerState,
+    StatfeedEvent,
     TeamState,
     UpdateStateEvent,
     parse_message,
@@ -685,6 +686,67 @@ class AggregatorTests(unittest.TestCase):
             MatchEndedEvent(match_guid="MATCH-1", winner_team_num=0),
         )
         self.assertEqual(win.snapshot.session.win_streak, 1)
+
+    def test_time_on_wall_accumulates_when_bonwall(self) -> None:
+        teams = (TeamState("Blue", 0, 0), TeamState("Orange", 1, 0))
+        p = PlayerState(
+            name="A",
+            primary_id="Steam|wall|0",
+            shortcut=1,
+            team_num=0,
+            has_car=True,
+            on_ground=False,
+            on_wall=True,
+            speed=1000.0,
+            boost=50,
+        )
+        p2 = PlayerState(
+            name="B",
+            primary_id="Steam|wallb|0",
+            shortcut=2,
+            team_num=1,
+            has_car=True,
+            on_ground=True,
+            on_wall=False,
+            speed=800.0,
+            boost=40,
+        )
+        agg = DemolyticsAggregator(user_primary_id="Steam|wall|0")
+        t0 = datetime(2026, 1, 1, tzinfo=UTC)
+        agg.handle_event(
+            UpdateStateEvent("MW", (p, p2), GameState(teams=teams, elapsed=0.0)),
+            t0,
+        )
+        agg.handle_event(
+            UpdateStateEvent("MW", (p, p2), GameState(teams=teams, elapsed=3.0)),
+            datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        )
+        assert agg.current_match is not None
+        acc = agg.current_match.players["Steam|wall|0"]
+        self.assertAlmostEqual(acc.time_on_wall, 3.0)
+
+    def test_crossbar_hit_statfeed_increments_counter(self) -> None:
+        aggregator = DemolyticsAggregator(user_primary_id="Steam|111|0")
+        payload = json.loads((FIXTURE_DIR / "update_state_2v2.json").read_text(encoding="utf-8"))
+        aggregator.handle_event(parse_message(payload), datetime(2026, 1, 1, tzinfo=UTC))
+        second = copy.deepcopy(payload)
+        second["Data"]["Game"]["Elapsed"] = 12
+        aggregator.handle_event(parse_message(second), datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC))
+        aggregator.handle_event(
+            StatfeedEvent(
+                match_guid="MATCH-1",
+                event_name="StatfeedEvent",
+                stat_name="CrossbarHit",
+                stat_type="",
+                main_target=PlayerRef(primary_id="Steam|111|0", shortcut=1, team_num=0),
+                secondary_target=None,
+            ),
+        )
+        assert aggregator.current_match is not None
+        acc = aggregator.current_match.players["Steam|111|0"]
+        self.assertEqual(acc.crossbar_hits, 1)
+        snap = acc.snapshot(opposing_score=0, is_user=True, match_duration_seconds=12.0)
+        self.assertEqual(snap.stats["crossbar_hits"], 1.0)
 
 
 if __name__ == "__main__":
