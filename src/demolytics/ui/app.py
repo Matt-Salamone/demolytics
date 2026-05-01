@@ -974,20 +974,12 @@ class DemolyticsApp(ctk.CTk):
             team_label = team.team_name or f"Team {team.team_num}"
             tv = team.stats.get(inner)
             display = _format_live_match_team_stat(stat_key, team, tv)
-            muted = display == LIVE_MATCH_UNAVAILABLE
             name_lbl.configure(text=f"{team_label}:")
-            if muted:
-                value_lbl.configure(
-                    text=display,
-                    font=ctk.CTkFont(),
-                    text_color=("gray40", "gray62"),
-                )
-            else:
-                value_lbl.configure(
-                    text=display,
-                    font=self._live_team_value_font_bold,
-                    text_color=_LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR,
-                )
+            value_lbl.configure(
+                text=display,
+                font=self._live_team_value_font_bold,
+                text_color=_LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR,
+            )
 
     def _build_history_tab(self) -> None:
         self.history_tab.grid_columnconfigure(0, weight=1)
