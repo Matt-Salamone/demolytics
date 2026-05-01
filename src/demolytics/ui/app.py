@@ -70,8 +70,8 @@ _ENCOUNTERS_TAB_MAX_WIDTH = 1024
 _STATS_LIVE_MATCH_PAIR_MAX_WIDTH = 2 * _TAB_CONTENT_MAX_WIDTH
 # Inset inside bordered panels (Stats subtabs, Encounters only; not the encounter playlist strip).
 _STATS_CONTENT_PANEL_PAD = 12
-# Live Match team column: RL hides opposing car telemetry so we show this instead of zeros.
-LIVE_MATCH_UNAVAILABLE = "Unavailable"
+# Live Match team column: RL hides opposing car telemetry; show a lock instead of a numeric lie.
+LIVE_MATCH_UNAVAILABLE = "\U0001f512"
 # CTkLabel.configure rejects text_color=None; use explicit theme-style defaults for normal values.
 _LIVE_TEAM_VALUE_DEFAULT_TEXT_COLOR = ("gray10", "gray90")
 # Main CTkTabview: slightly wider than the widest inner content max so the tab chrome fits with padding.
@@ -915,7 +915,7 @@ class DemolyticsApp(ctk.CTk):
         return value_label
 
     def _stat_row_team_live_values(self, parent: ctk.CTkFrame, label: str) -> ctk.CTkFrame:
-        """Stat name + value column as a stack frame so opposing-team \"Unavailable\" can use its own font."""
+        """Stat name + value column as a stack frame so hidden opponent stats can use muted styling."""
         row = parent.grid_size()[1]
         ctk.CTkLabel(parent, text=label, anchor="w").grid(row=row, column=0, sticky="w", padx=8, pady=4)
         value_slot = ctk.CTkFrame(parent, fg_color="transparent")
