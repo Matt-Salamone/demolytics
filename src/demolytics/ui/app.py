@@ -187,6 +187,9 @@ class DemolyticsApp(ctk.CTk):
         self.snapshot = self.aggregator.snapshot()
         self.stat_live_personal_labels: dict[str, ctk.CTkLabel] = {}
         self.stat_live_team_value_slots: dict[str, ctk.CTkFrame] = {}
+        # (team name label, value label) per row; rebuilt only when team count changes (not every poll).
+        self._live_team_row_label_pairs: dict[str, list[tuple[ctk.CTkLabel, ctk.CTkLabel]]] = {}
+        self._live_team_value_font_bold = ctk.CTkFont(weight="bold")
         self.session_average_labels: dict[str, ctk.CTkLabel] = {}
         self.global_average_labels: dict[str, ctk.CTkLabel] = {}
         self.stats_session_scope_label: ctk.CTkLabel | None = None
@@ -797,6 +800,7 @@ class DemolyticsApp(ctk.CTk):
 
         self.stat_live_personal_labels.clear()
         self.stat_live_team_value_slots.clear()
+        self._live_team_row_label_pairs.clear()
 
         has_personal = False
         has_team = False
@@ -916,6 +920,68 @@ class DemolyticsApp(ctk.CTk):
         value_slot.grid(row=row, column=1, sticky="e", padx=8, pady=4)
         value_slot.grid_columnconfigure(0, weight=1)
         return value_slot
+
+    def _sync_live_team_value_slot(
+        self,
+        stat_key: str,
+        value_slot: ctk.CTkFrame,
+        teams_sorted: tuple[TeamStatsSnapshot, ...],
+    ) -> None:
+        """Create team lines once per layout; only ``configure`` on updates (avoids 250ms flicker)."""
+        inner = team_stat_suffix(stat_key)
+        n = len(teams_sorted)
+        want_rows = 1 if n == 0 else n
+        pairs = self._live_team_row_label_pairs.get(stat_key)
+        if pairs is None or len(pairs) != want_rows:
+            for child in value_slot.winfo_children():
+                child.destroy()
+            built: list[tuple[ctk.CTkLabel, ctk.CTkLabel]] = []
+            if n == 0:
+                line = ctk.CTkFrame(value_slot, fg_color="transparent")
+                line.pack(fill="x", pady=1)
+                line.grid_columnconfigure(0, weight=1)
+                name_lbl = ctk.CTkLabel(line, text="", anchor="w")
+                name_lbl.grid(row=0, column=0, sticky="w", padx=(0, 4))
+                value_lbl = ctk.CTkLabel(line, text="--", anchor="e", font=self._live_team_value_font_bold)
+                value_lbl.grid(row=0, column=1, sticky="e")
+                built.append((name_lbl, value_lbl))
+            else:
+                for _ in range(n):
+                    line = ctk.CTkFrame(value_slot, fg_color="transparent")
+                    line.pack(fill="x", pady=1)
+                    line.grid_columnconfigure(0, weight=1)
+                    name_lbl = ctk.CTkLabel(line, text="", anchor="w")
+                    name_lbl.grid(row=0, column=0, sticky="w", padx=(0, 4))
+                    value_lbl = ctk.CTkLabel(line, text="", anchor="e")
+                    value_lbl.grid(row=0, column=1, sticky="e")
+                    built.append((name_lbl, value_lbl))
+            self._live_team_row_label_pairs[stat_key] = built
+            pairs = built
+
+        if n == 0:
+            _, value0 = pairs[0]
+            value0.configure(text="--", font=self._live_team_value_font_bold, text_color=None)
+            return
+
+        for i, team in enumerate(teams_sorted):
+            name_lbl, value_lbl = pairs[i]
+            team_label = team.team_name or f"Team {team.team_num}"
+            tv = team.stats.get(inner)
+            display = _format_live_match_team_stat(stat_key, team, tv)
+            muted = display == LIVE_MATCH_UNAVAILABLE
+            name_lbl.configure(text=f"{team_label}:")
+            if muted:
+                value_lbl.configure(
+                    text=display,
+                    font=ctk.CTkFont(),
+                    text_color=("gray40", "gray62"),
+                )
+            else:
+                value_lbl.configure(
+                    text=display,
+                    font=self._live_team_value_font_bold,
+                    text_color=None,
+                )
 
     def _build_history_tab(self) -> None:
         self.history_tab.grid_columnconfigure(0, weight=1)
@@ -1312,36 +1378,9 @@ class DemolyticsApp(ctk.CTk):
                 user_val = snapshot.live_user_stats.get(stat_key)
                 label.configure(text=_format_stat(stat_key, user_val), justify="right")
 
+            teams_sorted = tuple(sorted(snapshot.live_teams, key=lambda t: t.team_num))
             for stat_key, value_slot in self.stat_live_team_value_slots.items():
-                for child in value_slot.winfo_children():
-                    child.destroy()
-                inner = team_stat_suffix(stat_key)
-                teams_sorted = tuple(sorted(snapshot.live_teams, key=lambda t: t.team_num))
-                if not teams_sorted:
-                    ctk.CTkLabel(
-                        value_slot,
-                        text="--",
-                        anchor="e",
-                        font=ctk.CTkFont(weight="bold"),
-                    ).pack(anchor="e")
-                    continue
-                for team in teams_sorted:
-                    team_label = team.team_name or f"Team {team.team_num}"
-                    tv = team.stats.get(inner)
-                    display = _format_live_match_team_stat(stat_key, team, tv)
-                    muted = display == LIVE_MATCH_UNAVAILABLE
-                    line = ctk.CTkFrame(value_slot, fg_color="transparent")
-                    line.pack(fill="x", pady=1)
-                    line.grid_columnconfigure(0, weight=1)
-                    ctk.CTkLabel(line, text=f"{team_label}:", anchor="w").grid(
-                        row=0, column=0, sticky="w", padx=(0, 4)
-                    )
-                    value_kwargs: dict[str, Any] = {"text": display, "anchor": "e"}
-                    if muted:
-                        value_kwargs["text_color"] = ("gray40", "gray62")
-                    else:
-                        value_kwargs["font"] = ctk.CTkFont(weight="bold")
-                    ctk.CTkLabel(line, **value_kwargs).grid(row=0, column=1, sticky="e")
+                self._sync_live_team_value_slot(stat_key, value_slot, teams_sorted)
 
         session_averages = self.repository.get_user_averages(
             game_mode=session_playlist_mode,
@@ -1826,6 +1865,7 @@ class DemolyticsApp(ctk.CTk):
             child.destroy()
         self.stat_live_personal_labels.clear()
         self.stat_live_team_value_slots.clear()
+        self._live_team_row_label_pairs.clear()
         self.session_average_labels.clear()
         self.global_average_labels.clear()
         self.stats_session_scope_label = None
