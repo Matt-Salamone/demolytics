@@ -140,8 +140,9 @@ def setup_instructions(status: StatsApiStatus) -> list[str]:
     doc_hint = Path.home() / "Documents" / "My Games" / "Rocket League" / "TAGame" / "Config"
     return [
         f"Open {ini_path} (or an override in {doc_hint}).",
-        "Set PacketSendRate to a value greater than 0, such as PacketSendRate=20.",
-        f"Optional: set Port={status.port or DEFAULT_STATS_API_PORT}.",
+        "Replace or create the file so it contains only a [TAGame.MatchStatsExporter_TA] section "
+        f"with Port={status.port or DEFAULT_STATS_API_PORT} and PacketSendRate greater than 0 (e.g. 20).",
+        "Remove duplicate PacketSendRate lines or extra [StatsAPI] blocks; a merged value of 0 disables the API.",
         "Save the file and restart Rocket League before reconnecting Demolytics.",
     ]
 

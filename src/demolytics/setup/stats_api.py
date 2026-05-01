@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import configparser
 import ctypes
 import os
 import subprocess
@@ -11,7 +10,7 @@ from typing import TYPE_CHECKING
 import customtkinter as ctk
 from tkinter import messagebox
 
-from demolytics.config.rocket_league import DEFAULT_STATS_API_RELATIVE_PATH
+from demolytics.config.rocket_league import DEFAULT_STATS_API_PORT, DEFAULT_STATS_API_RELATIVE_PATH
 
 if TYPE_CHECKING:
     from customtkinter import CTkBaseClass
@@ -34,31 +33,37 @@ _RESTART_RL_NOTE = (
 )
 
 
+def _default_stats_api_ini_contents(
+    *,
+    port: int = DEFAULT_STATS_API_PORT,
+    packet_send_rate: int = PACKET_SEND_RATE_TARGET,
+) -> str:
+    """Exact contents Rocket League expects for ``DefaultStatsAPI.ini`` (single section, no duplicates)."""
+    return (
+        "[TAGame.MatchStatsExporter_TA]\n"
+        f"Port = {port}\n"
+        f"PacketSendRate = {packet_send_rate}\n"
+    )
+
+
 def _ini_path_for_install(install_dir: str | Path) -> Path:
     return Path(install_dir) / DEFAULT_STATS_API_RELATIVE_PATH
 
 
 def _patch_default_stats_api_ini(ini_path: Path, packet_send_rate: int = PACKET_SEND_RATE_TARGET) -> None:
-    """Read and write DefaultStatsAPI.ini with configparser; raises OSError subclasses on failure."""
+    """Replace ``DefaultStatsAPI.ini`` entirely so duplicate sections cannot disable the Stats API."""
     ini_path = ini_path.resolve()
     ini_path.parent.mkdir(parents=True, exist_ok=True)
-
-    parser = configparser.ConfigParser()
-    parser.optionxform = str
-    if ini_path.exists():
-        parser.read(ini_path, encoding="utf-8-sig")
-
-    if not parser.has_section("StatsAPI"):
-        parser.add_section("StatsAPI")
-
-    parser.set("StatsAPI", "PacketSendRate", str(packet_send_rate))
-
-    with open(ini_path, "w", encoding="utf-8", newline="") as handle:
-        parser.write(handle)
+    ini_path.write_text(
+        _default_stats_api_ini_contents(packet_send_rate=packet_send_rate),
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def _manual_steps_text(ini_path: Path) -> str:
     path_str = str(ini_path.resolve())
+    body = _default_stats_api_ini_contents().rstrip("\n")
     return (
         f"File path (copy as needed):\n{path_str}\n\n"
         "Step-by-step:\n"
@@ -66,8 +71,8 @@ def _manual_steps_text(ini_path: Path) -> str:
         "2. Open the file above in a text editor. If Windows blocks saving, open "
         "the editor with Run as administrator, or copy the file to your Desktop, "
         "edit it, then copy it back and allow the UAC prompt.\n"
-        "3. Ensure there is a [StatsAPI] section. Under it, set or change exactly:\n"
-        f"   PacketSendRate={PACKET_SEND_RATE_TARGET}\n"
+        "3. Replace the entire file with exactly:\n\n"
+        f"{body}\n\n"
         "4. Save the file.\n"
         "5. Start Rocket League again.\n\n"
         + _RESTART_RL_NOTE
@@ -207,7 +212,7 @@ class StatsApiPermissionModal(ctk.CTkToplevel):
 
 def enable_stats_api(install_dir: str, *, parent: CTkBaseClass | None = None) -> bool:
     """
-    Set PacketSendRate in ``<install_dir>/TAGame/Config/DefaultStatsAPI.ini`` using configparser.
+    Write ``<install_dir>/TAGame/Config/DefaultStatsAPI.ini`` with the Stats API enabled.
 
     Attempts a normal write first. On ``PermissionError``, Windows shows a ``CTkToplevel``
     with elevation and manual options when ``parent`` is provided; otherwise the error is re-raised.
