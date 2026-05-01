@@ -70,6 +70,8 @@ _ENCOUNTERS_TAB_MAX_WIDTH = 1024
 _STATS_LIVE_MATCH_PAIR_MAX_WIDTH = 2 * _TAB_CONTENT_MAX_WIDTH
 # Inset inside bordered panels (Stats subtabs, Encounters only; not the encounter playlist strip).
 _STATS_CONTENT_PANEL_PAD = 12
+# Live Match team column: RL hides opposing car telemetry so we show this instead of zeros.
+LIVE_MATCH_UNAVAILABLE = "Unavailable"
 # Main CTkTabview: slightly wider than the widest inner content max so the tab chrome fits with padding.
 _TAB_VIEW_OUTER_PADDING = 56
 _TAB_VIEW_MAX_OUTER_WIDTH = (
@@ -184,7 +186,7 @@ class DemolyticsApp(ctk.CTk):
         self.api_thread: StatsApiThread | None = None
         self.snapshot = self.aggregator.snapshot()
         self.stat_live_personal_labels: dict[str, ctk.CTkLabel] = {}
-        self.stat_live_team_labels: dict[str, ctk.CTkLabel] = {}
+        self.stat_live_team_value_slots: dict[str, ctk.CTkFrame] = {}
         self.session_average_labels: dict[str, ctk.CTkLabel] = {}
         self.global_average_labels: dict[str, ctk.CTkLabel] = {}
         self.stats_session_scope_label: ctk.CTkLabel | None = None
@@ -794,17 +796,16 @@ class DemolyticsApp(ctk.CTk):
         self._live_match_mismatch_wrap.grid_remove()
 
         self.stat_live_personal_labels.clear()
-        self.stat_live_team_labels.clear()
+        self.stat_live_team_value_slots.clear()
 
         has_personal = False
         has_team = False
         for stat_key in _stats_tab_stat_row_order(self.settings.visible_stats, STATS_TAB_COLUMN_KEYS):
             if stat_key.startswith("team_"):
                 has_team = True
-                self.stat_live_team_labels[stat_key] = self._stat_row(
+                self.stat_live_team_value_slots[stat_key] = self._stat_row_team_live_values(
                     teams_scroll,
                     STAT_LABELS[stat_key],
-                    "--",
                 )
             else:
                 has_personal = True
@@ -906,6 +907,15 @@ class DemolyticsApp(ctk.CTk):
         value_label = ctk.CTkLabel(parent, text=value, anchor="e", font=ctk.CTkFont(weight="bold"))
         value_label.grid(row=row, column=1, sticky="e", padx=8, pady=4)
         return value_label
+
+    def _stat_row_team_live_values(self, parent: ctk.CTkFrame, label: str) -> ctk.CTkFrame:
+        """Stat name + value column as a stack frame so opposing-team \"Unavailable\" can use its own font."""
+        row = parent.grid_size()[1]
+        ctk.CTkLabel(parent, text=label, anchor="w").grid(row=row, column=0, sticky="w", padx=8, pady=4)
+        value_slot = ctk.CTkFrame(parent, fg_color="transparent")
+        value_slot.grid(row=row, column=1, sticky="e", padx=8, pady=4)
+        value_slot.grid_columnconfigure(0, weight=1)
+        return value_slot
 
     def _build_history_tab(self) -> None:
         self.history_tab.grid_columnconfigure(0, weight=1)
@@ -1302,19 +1312,36 @@ class DemolyticsApp(ctk.CTk):
                 user_val = snapshot.live_user_stats.get(stat_key)
                 label.configure(text=_format_stat(stat_key, user_val), justify="right")
 
-            for stat_key, label in self.stat_live_team_labels.items():
+            for stat_key, value_slot in self.stat_live_team_value_slots.items():
+                for child in value_slot.winfo_children():
+                    child.destroy()
                 inner = team_stat_suffix(stat_key)
-                lines: list[str] = []
-                for team in sorted(snapshot.live_teams, key=lambda t: t.team_num):
+                teams_sorted = tuple(sorted(snapshot.live_teams, key=lambda t: t.team_num))
+                if not teams_sorted:
+                    ctk.CTkLabel(
+                        value_slot,
+                        text="--",
+                        anchor="e",
+                        font=ctk.CTkFont(weight="bold"),
+                    ).pack(anchor="e")
+                    continue
+                for team in teams_sorted:
                     team_label = team.team_name or f"Team {team.team_num}"
                     tv = team.stats.get(inner)
-                    lines.append(
-                        f"{team_label}: {_format_live_match_team_stat(stat_key, team, tv)}"
+                    display = _format_live_match_team_stat(stat_key, team, tv)
+                    muted = display == LIVE_MATCH_UNAVAILABLE
+                    line = ctk.CTkFrame(value_slot, fg_color="transparent")
+                    line.pack(fill="x", pady=1)
+                    line.grid_columnconfigure(0, weight=1)
+                    ctk.CTkLabel(line, text=f"{team_label}:", anchor="w").grid(
+                        row=0, column=0, sticky="w", padx=(0, 4)
                     )
-                label.configure(
-                    text="\n".join(lines) if lines else "--",
-                    justify="right",
-                )
+                    value_kwargs: dict[str, Any] = {"text": display, "anchor": "e"}
+                    if muted:
+                        value_kwargs["text_color"] = ("gray40", "gray62")
+                    else:
+                        value_kwargs["font"] = ctk.CTkFont(weight="bold")
+                    ctk.CTkLabel(line, **value_kwargs).grid(row=0, column=1, sticky="e")
 
         session_averages = self.repository.get_user_averages(
             game_mode=session_playlist_mode,
@@ -1798,7 +1825,7 @@ class DemolyticsApp(ctk.CTk):
         for child in self.stats_tab.winfo_children():
             child.destroy()
         self.stat_live_personal_labels.clear()
-        self.stat_live_team_labels.clear()
+        self.stat_live_team_value_slots.clear()
         self.session_average_labels.clear()
         self.global_average_labels.clear()
         self.stats_session_scope_label = None
@@ -1856,7 +1883,7 @@ def _format_live_match_team_stat(
     if not team.is_user_team:
         base = team_stat_suffix(stat_key) if stat_key.startswith("team_") else stat_key
         if base in OPPONENT_SPECTATOR_HIDDEN_GOAL_STAT_KEYS:
-            return "Unavailable"
+            return LIVE_MATCH_UNAVAILABLE
     return _format_stat(stat_key, value)
 
 
