@@ -1,0 +1,7 @@
+# **0014: Live Session State Aggregation**
+
+**Context:** Between matches, the Presentation Layer displays a "Session Recap" that calculates rolling averages and macro-insights based on all matches played during the current contiguous session. Executing complex statistical queries against the SQLite database (calculating means and standard deviations across dozens of rows) every time a match ends creates unnecessary disk read overhead.  
+**Decision:** The Engine will maintain a "Live Session State" in memory. When a match successfully passes the Match Validity Gate and undergoes the Final Snapshot Merge, the Engine will insert the data into SQLite and simultaneously push the result into the Live Session State array. The Engine will evaluate Session Recap insights exclusively against this in-memory array.  
+**Consequences:** \* **Positive:** Zero disk read overhead during gameplay and immediate Session Recap generation.
+
+* **Negative:** If the background Engine process crashes mid-session, the Live Session State is lost from RAM. The Engine must implement a "Session Hydration" routine on startup: querying SQLite for the most recent unclosed session and pre-loading it into the Live Session State before accepting new WebSocket connections.

@@ -1,0 +1,5 @@
+# **0003: Insight Hierarchy Priority for Spectator Metrics**
+
+**Context:** The Rocket League Stats API obscures opposing team data for specific metrics like Speed, Boost, and Powerslide (marked as SPECTATOR locked). When generating an Insight for these metrics, the Engine must decide whether to compare the user against their current live teammates (evaluating immediate team synergy) or against their own Historical Baseline from the SQLite database (evaluating individual mechanical form).  
+**Decision:** We will prioritize the Historical Baseline over the live team average for all Spectator Metrics. The Engine will only compare a player to their teammates if the historical comparison yields no notable statistical outliers.  
+**Consequences:** The Insight Engine will primarily function as a personal mechanical coach rather than a team-synergy analyzer. Pre-fetching logic will be simplified, as the Engine must reliably load the user's 50-game rolling baseline for all Spectator Metrics at the start of every match.

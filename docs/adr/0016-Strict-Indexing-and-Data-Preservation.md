@@ -1,0 +1,5 @@
+# **0016: Strict Indexing and Data Preservation**
+
+**Context:** Over years of usage, a player's local SQLite database could grow to tens of thousands of matches. To fuel the Insight Engine, the background process must frequently query the "50-game rolling baseline." Executing a full table scan on 10,000+ rows to calculate this baseline would introduce unacceptable query latency. However, automatically deleting old user data (Data Retention Policy) is a hostile user experience.  
+**Decision:** We will strictly preserve all historical user data. To ensure read performance scales indefinitely, the SQLite schema will employ strict composite indexing, specifically on (GameMode, Timestamp DESC). This guarantees that querying the top 50 matches is an O(log N) operation that executes in milliseconds, regardless of total database size.  
+**Consequences:** Storage capacity is a non-issue (10,000 rows ≈ 10MB). The user maintains complete sovereignty over their data. We will provide manual UX toggles to allow users to optionally wipe their "Performance Statistics" or their "Encounter History" at their own discretion.

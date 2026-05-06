@@ -1,0 +1,5 @@
+# **0019: File System Watcher and Write-Lock Safety**
+
+**Context:** Detecting newly saved .replay files via hard-coded polling timers is brittle; users can skip post-match screens early, and finding a newly created file does not guarantee the OS has finished writing the \~2MB payload to disk. Attempting to upload a file while the game client still holds a write-lock results in EBUSY crashes or corrupted uploads.  
+**Decision:** We will use an event-driven File System Watcher (e.g., chokidar), scoped strictly and non-invasively to the TAGame/Demos directory. Crucially, the watcher must be configured to utilize awaitWriteFinish stabilization mechanics. The Engine will not be notified of a new file until the OS confirms the file size has remained constant for a minimum threshold (e.g., 2 seconds), explicitly proving the write-lock is released.  
+**Consequences:** This guarantees pristine .replay file uploads without requiring custom, error-prone byte-polling logic. It natively decouples replay detection from the strict match-timer lifecycle, safely supporting both instant post-match saves and asynchronous match-history saves.

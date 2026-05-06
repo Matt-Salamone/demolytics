@@ -1,0 +1,5 @@
+# **0005: Demolition Aggregation Suspension**
+
+**Context:** When a player is demolished, they are removed from the field for 3 seconds. During this time (which falls within the overall "Active Gameplay Phase"), the API continues to send UpdateState ticks reporting their Speed as 0 and bOnGround as false. Including these ticks in the denominator for calculating metrics like "Average Speed" or "Aerial %" would artificially deflate/inflate a player's true mechanical performance metrics.  
+**Decision:** The In-Memory Aggregator will implement an "Active Player State" check. While a player's bDemolished flag is true, the Engine will completely suspend their individual telemetry aggregation. Their personal Total Ticks denominator and all running tallies will freeze until bDemolished returns to false upon respawn.  
+**Consequences:** A player's Total Ticks will diverge from the overall Match Ticks based on how many times they are demolished. Averages like "Average Speed" and "Low Boost %" will now purely reflect the time the player physically existed on the field, resulting in much cleaner mechanical data for the Insight Engine.

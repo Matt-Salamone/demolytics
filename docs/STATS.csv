@@ -1,0 +1,24 @@
+Stat Name,Group,API Source / Event(s),Spectator Locked,Derivation Logic
+Goals,Impact & Playmaking,UpdateState.Players[].Goals,FALSE,Direct read from API.
+Shots,Impact & Playmaking,UpdateState.Players[].Shots,FALSE,Direct read from API.
+Assists,Impact & Playmaking,UpdateState.Players[].Assists,FALSE,Direct read from API.
+Saves,Impact & Playmaking,UpdateState.Players[].Saves,FALSE,Direct read from API.
+Shooting %,Impact & Playmaking,"UpdateState (Goals, Shots)",FALSE,(Goals / Shots) * 100. (Handle divide-by-zero if Shots = 0).
+Demos Inflicted,Impact & Playmaking,UpdateState.Players[].Demos,FALSE,Direct read from API.
+Demos Taken,Impact & Playmaking,"StatfeedEvent, UpdateState.Players[].bDemolished",FALSE,"Count StatfeedEvent where Type == ""Demolition"" and SecondaryTarget.Name == Player.Name."
+Possession %,Impact & Playmaking,"BallHit, UpdateState.Game.Elapsed",FALSE,Time elapsed between BallHit (Player A) and next BallHit (Player B) / Total Match Time.
+Avg. BPM (Boost Per Min),Resource Management,"UpdateState.Players[].Boost, Game.Elapsed",TRUE,Cumulative boost usage / (Elapsed Seconds / 60).
+Avg. Boost Amount,Resource Management,UpdateState.Players[].Boost,TRUE,Sum of Boost values across all ticks / Total Ticks.
+Low Boost %,Resource Management,UpdateState.Players[].Boost,TRUE,Ticks where Boost <= 25 / Total Ticks.
+Boost While Supersonic,Resource Management,"UpdateState (Boost, bSupersonic)",TRUE,Cumulative boost drop calculated only during ticks where bSupersonic == true.
+Small Pads Collected,Resource Management,UpdateState.Players[].Boost,TRUE,Count occurrences where Boost increases by <=12 (requires buffer logic for simultaneous bBoosting drain).
+Big Pads Collected,Resource Management,"UpdateState (Boost, bDemolished)",TRUE,Count occurrences where Boost increases by >12 and reaches ~100. Ignore respawn after demos and goals (respawn grants 33).
+Average Speed,Pace & Positioning,UpdateState.Players[].Speed,TRUE,Sum of Speed across all ticks / Total Ticks.
+% Slow Speed,Pace & Positioning,UpdateState.Players[].Speed,TRUE,Ticks where Speed < 1400 / Total Ticks.
+% Supersonic,Pace & Positioning,UpdateState.Players[].bSupersonic,TRUE,Ticks where bSupersonic == true / Total Ticks.
+Aerial %,Pace & Positioning,UpdateState.Players[].bOnGround,TRUE,Ticks where bOnGround == false / Total Ticks.
+On Wall %,Pace & Positioning,UpdateState.Players[].bOnWall,TRUE,Ticks where bOnWall == true / Total Ticks.
+Powerslide %,Pace & Positioning,UpdateState.Players[].bPowersliding,TRUE,Ticks where bPowersliding == true / Total Ticks.
+Offensive Touches,Pace & Positioning,"BallHit, UpdateState.Players[].TeamNum",FALSE,"Count BallHit. If TeamNum == 0 (Blue), require Location.Y > 0. If TeamNum == 1 (Orange), require Location.Y < 0."
+Defensive Touches,Pace & Positioning,"BallHit, UpdateState.Players[].TeamNum",FALSE,"Count BallHit. If TeamNum == 0, require Location.Y < 0. If TeamNum == 1, require Location.Y > 0."
+Offensive Crossbars,Impact & Playmaking,"CrossbarHit, UpdateState.Players[].TeamNum",FALSE,Count CrossbarHit. Match BallLastTouch.Player.TeamNum. Require BallLocation.Y to match opponent goal coordinates.

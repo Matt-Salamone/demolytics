@@ -1,0 +1,7 @@
+# **0002: In-Memory Telemetry Aggregation**
+
+**Context:** The Rocket League Stats API broadcasts UpdateState events up to 120 times per second. Directly writing these ticks, or even second-by-second aggregations, to a local SQLite database would cause massive disk I/O thrashing, potentially degrading the user's game performance and violating our core constraints. Furthermore, the Insight Engine needs immediate access to this data the millisecond a goal is scored.  
+**Decision:** We will implement an **In-Memory Aggregator** pattern. The Engine will maintain a Live Match State purely in RAM. Incoming 120Hz ticks will exclusively update running tallies in memory. The SQLite database will only be queried at the start of a match (to load the Historical Baseline into memory) and written to exactly *once* at the MatchEnded event (persisting the final match summary).  
+**Consequences:** \* **Positive:** Complete elimination of live-game disk I/O. Extremely fast Insight generation during goals.
+
+* **Negative:** If the Node Engine or game crashes mid-match before MatchEnded fires, all data for that specific match is permanently lost. This is an acceptable trade-off for protecting game frame rates.

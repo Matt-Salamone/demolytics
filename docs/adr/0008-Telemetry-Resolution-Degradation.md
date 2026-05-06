@@ -1,0 +1,7 @@
+# **0008: Telemetry Resolution Degradation**
+
+**Context:** The user can manually configure the PacketSendRate in the Rocket League configuration files. Extremely low tick rates (e.g., \< 10Hz) create time deltas large enough to mathematically break sensitive heuristic calculations (like detecting pad pickups) and render aggregated averages (like Speed and % Powerslide) statistically useless. Attempting to force ini file changes via the Engine risks UAC permission failures.  
+**Decision:** The Engine will employ a "Telemetry Resolution Gate." Upon entering a Match, the Engine will sample the time delta between the first few UpdateState ticks. If the effective frequency is below 10Hz, the Engine will gracefully degrade its capabilities. It will cease calculating and storing Spectator Metrics (Speed, Boost, Pads) for that session to protect database integrity, falling back to exclusively processing Global Metrics (Goals, Shots, Demos).  
+**Consequences:** \* **Positive:** We guarantee the mathematical integrity of the local SQLite database without relying on invasive OS permission escalations. We preserve the \> 12 Big Pad threshold cleanly.
+
+* **Negative:** Users with improperly configured API files will experience a degraded UI (missing Insights for mechanical metrics), requiring them to follow in-app instructions to manually fix their configuration.

@@ -1,0 +1,5 @@
+# **0007: Ambiguous Boost Cap Resolution**
+
+**Context:** Because boost is hard-capped at 100, picking up a pad when already near maximum boost creates an ambiguous data point. If a player's ExpectedBoost is 93, and their ActualBoost jumps to 100, the \+7 net gain could technically result from either a Small Pad (+12) or a Big Pad (+100) hitting the ceiling.  
+**Decision:** The Engine will employ an "Ambiguous Cap Resolution" rule. Any ambiguous net gain capping at 100 that is mathematically less than or equal to 12 will be strictly classified as a Small Pad.  
+**Consequences:** This relies on the behavioral assumption that players with high boost avoid Big Pads to preserve them for teammates, and that Small Pads are physically more abundant. While this may occasionally misclassify a Big Pad, it protects the integrity of the "Big Pads Collected" metric, which carries significantly more weight in resource-management Insights.

@@ -1,0 +1,7 @@
+# **0006: Boost Delta Heuristic & Acceptable Inaccuracy**
+
+**Context:** The Rocket League Stats API does not emit specific events for picking up boost pads. It only provides a player's current Boost level (0-100) and bBoosting status (true/false) per tick. Because a player can pick up a pad while simultaneously consuming boost, the raw change in boost between ticks is often not a clean \+12 or \+100. Network jitter can further mask these pickups.  
+**Decision:** The In-Memory Aggregator will utilize a "Boost Delta Heuristic" to infer pad pickups. It will calculate an ExpectedBoost based on the elapsed time and bBoosting state, and compare it to the API's ActualBoost. We intentionally accept that this heuristic will not be 100% accurate. We prioritize ensuring Big Pads are counted accurately over Small Pads, as Big Pads carry significantly more contextual weight in match performance.  
+**Consequences:** \* **Positive:** We can derive highly valuable resource management stats (BPM, Pads Collected) without requiring invasive memory reading.
+
+* **Negative:** Small pad counts may occasionally under-report if a player is feathering their boost erratically during a lag spike. Our Insights must treat boost collection metrics as strong approximations rather than infallible absolute truths.

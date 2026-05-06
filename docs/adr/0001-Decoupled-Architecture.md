@@ -1,0 +1,5 @@
+# **0001: Decoupled UWP Presentation and Local Engine**
+
+**Context:** We must render the Demolytics V2 UI cleanly over Rocket League while the game runs in "Exclusive Fullscreen" mode. Standard Win32/Electron windows cannot do this natively without utilizing DirectX hooking/memory injection, which violates our strict "zero-ban-risk" requirement regarding Easy Anti-Cheat (EAC). While platforms like Overwolf safely bypass this, they require users to install a heavy third-party ecosystem, which we want to avoid.  
+**Decision:** We will build a strictly decoupled architecture. The "Presentation Layer" will be a native Windows Game Bar Widget (UWP), which Microsoft explicitly permits to render over Exclusive Fullscreen. The "Engine" (handling data ingestion, SQLite, and Insight evaluation) will run as a separate local background service (e.g., a hidden Node executable). The two components will communicate via a local WebSocket.  
+**Consequences:** We completely avoid third-party lock-in and anti-cheat risks. However, we assume the burden of managing inter-process communication and packaging two distinct applications into a single installer for the end-user.
